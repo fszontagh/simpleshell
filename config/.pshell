@@ -1,0 +1,14 @@
+[shell]
+prompt_format = "${COLOR_RED}${USER}${COLOR_RESET}@${COLOR_GREEN}${HOSTNAME}${COLOR_RESET} [${FONT_BOLD}${CURRENT_DATE}${COLOR_RESET}] [${PWD}]${SHELL_PROMPT} "
+
+[environment]
+HOSTNAME=`hostname -f`
+
+[variables]
+CURRENT_DATE=`date '+%Y-%m-%d %H:%M:%S'`
+SHELL_PROMPT="$"
+
+[aliases]
+ls= "ls -ltrh --color=auto"
+ll= "ls -ltr --color=auto"
+l= "ls -ltrh --color=auto"
