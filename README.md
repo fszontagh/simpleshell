@@ -43,7 +43,7 @@ SimpleShell is a modern, POSIX-compliant shell designed for both usability and e
 ### Building from Source
 
 ```bash
-git clone https://github.com/yourusername/simpleshell.git
+git clone https://github.com/fszontagh/simpleshell.git
 cd simpleshell
 mkdir build && cd build
 cmake ..
@@ -98,9 +98,9 @@ $ sleep 60
 
 $ jobs
 Running processes: 1
-PID: 123455 status: running, Command: sleep 30 
+PID: 123455 status: running, Command: sleep 30
 Stopped jobs: 1
-PID: 123456 status: stopped, Command: sleep 30 
+PID: 123456 status: stopped, Command: sleep 30
 
 $ bg
 Continuing process 123456
