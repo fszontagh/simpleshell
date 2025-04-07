@@ -43,6 +43,7 @@ SimpleShell is a modern, POSIX-compliant shell designed for both usability and e
 ### Building from Source
 
 ```bash
+
 git clone https://github.com/fszontagh/simpleshell.git
 cd simpleshell
 mkdir build && cd build
@@ -57,14 +58,17 @@ Send command to Terminal
 ### Running SimpleShell
 
 ```bash
+
 ./simpleshell
 
 ```
 
 ### Reload configuration
 
-```shell
+```bash
+
 $ reload_config
+
 ```
 
 Send command to Terminal
@@ -73,7 +77,8 @@ Send command to Terminal
 
 ### Basic Command Execution
 
-```shell
+```bash
+
 $ ls -la
 $ echo "Hello, world!"
 $ cd ~/Documents
@@ -83,7 +88,8 @@ $ cd ~/Documents
 
 ### Background Processes
 
-```arduino
+```bash
+
 $ sleep 30 &
 Running in background: sleep 30 &
 Process 123456 running in background.
@@ -92,7 +98,7 @@ Process 123456 running in background.
 
 ### Job Control
 
-```shell
+```bash
 $ sleep 60
 ^Z
 
@@ -123,13 +129,12 @@ prompt_format = "${COLOR_GREEN}[${PWD}]${COLOR_RESET}$ "
 ### Example configuration file
 ```ini
 [shell]
-prompt_format = "${COLOR_RED}${USER}${COLOR_RESET}@${COLOR_GREEN}${HOSTNAME}${COLOR_RESET} [${FONT_BOLD}${CURRENT_DATE}${COLOR_RESET}] [${PWD}]${SHELL_PROMPT} "
+prompt_format = "${COLOR_RED}${USER}${COLOR_RESET}@${COLOR_GREEN}${HOSTNAME}${COLOR_RESET} [${PWD}]${SHELL_PROMPT} "
 
 [environment]
-HOSTNAME=`hostname -f`
+HOSTNAME=`hostname`
 
 [variables]
-CURRENT_DATE=`date '+%Y-%m-%d %H:%M:%S'`
 SHELL_PROMPT="$"
 
 [aliases]

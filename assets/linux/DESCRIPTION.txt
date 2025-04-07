@@ -1,0 +1,7 @@
+SimpleShell - Modern POSIX-compliant shell with advanced process management
+
+A lightweight, feature-rich shell implementation offering powerful process
+management, job control, and customizable user experience. Includes background
+process execution, signal handling, INI-based configuration, and command history.
+Built with modern C++ practices, it provides an intuitive alternative to
+traditional shells while maintaining POSIX compliance.

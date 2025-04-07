@@ -1,0 +1,65 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            pkg-config \
+            libreadline-dev \
+            lua5.3 \
+            liblua5.3-dev
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build project
+        run: cmake --build build --config Release
+
+      - name: Create .deb package
+        run: |
+          cd build
+          cpack -G DEB
+
+      - name: Create .tar.gz package
+        run: |
+          cd build
+          cpack -G TGZ
+
+      - name: Upload build artifacts (for manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: simpleshell-artifacts
+          path: |
+            build/*.deb
+            build/*.tar.gz
+            build/*.sha256
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: |
+            build/*.deb
+            build/*.tar.gz
+            build/*.sha256
