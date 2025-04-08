@@ -1,0 +1,153 @@
+#ifndef SIMPLESHELL_UTILS_H
+#define SIMPLESHELL_UTILS_H
+#include <string>
+
+namespace utils {
+class ConfigUtils {
+  public:
+    static std::string escape(const std::string & input) {
+        std::string result;
+        bool        inside_quotes = false;  //
+
+        for (char c : input) {
+            if (c == '\"') {
+                inside_quotes = !inside_quotes;  //
+            }
+
+            if (inside_quotes) {
+                result += c;  //
+            } else {
+                switch (c) {
+                    case ' ':
+                        result += "\\ ";  //
+                        break;
+                    case '\\':
+                        result += "\\\\";  //
+                        break;
+                    case '\n':
+                        result += "\\n";  //
+                        break;
+                    case '\r':
+                        result += "\\r";  //
+                        break;
+                    case '\t':
+                        result += "\\t";  //
+                        break;
+                    case '\b':
+                        result += "\\b";  //
+                        break;
+                    case '\f':
+                        result += "\\f";  //
+                        break;
+                    case '=':
+                        result += "\\=";  //
+                        break;
+                    case '#':
+                        result += "\\#";  //
+                        break;
+                    case ';':
+                        result += "\\;";  //
+                        break;
+                    case '\"':
+                        result += "\\\"";  //
+                        break;
+                    default:
+                        if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E) {
+                            // Nem-printelhető karaktert hexával escape-elünk
+                            char buf[5];
+                            snprintf(buf, sizeof(buf), "\\x%02X", static_cast<unsigned char>(c));
+                            result += buf;
+                        } else {
+                            result += c;
+                        }
+                        break;
+                }
+            }
+        }
+        return result;
+    }
+
+    static std::string unescape(const std::string & input) {
+        std::string result;
+        bool        inside_quotes = false;  //
+
+        for (size_t i = 0; i < input.length(); ++i) {
+            if (input[i] == '\"') {
+                inside_quotes = !inside_quotes;  //
+            }
+
+            if (inside_quotes) {
+                result += input[i];  //
+            } else {
+                if (input[i] == '\\' && i + 1 < input.length()) {
+                    char next = input[i + 1];
+                    switch (next) {
+                        case ' ':
+                            result += ' ';  //
+                            break;
+                        case '\\':
+                            result += '\\';  //
+                            break;
+                        case 'n':
+                            result += '\n';  //
+                            break;
+                        case 'r':
+                            result += '\r';  //
+                            break;
+                        case 't':
+                            result += '\t';  //
+                            break;
+                        case 'b':
+                            result += '\b';  //
+                            break;
+                        case 'f':
+                            result += '\f';  //
+                            break;
+                        case '=':
+                            result += '=';  //
+                            break;
+                        case '#':
+                            result += '#';  //
+                            break;
+                        case ';':
+                            result += ';';  //
+                            break;
+                        case '"':
+                            result += '\"';  //
+                            break;
+                        case 'x':
+                            if (i + 3 < input.length()) {
+                                std::string hex = input.substr(i + 2, 2);
+                                char        ch  = static_cast<char>(std::stoi(hex, nullptr, 16));
+                                result += ch;
+                                i += 3;         // \xHH -> step 4 chars forward
+                            } else {
+                                result += 'x';  // wrong \x
+                                i++;
+                            }
+                            break;
+                        default:
+                            result += next;
+                            break;
+                    }
+                    ++i;
+                } else {
+                    result += input[i];
+                }
+            }
+        }
+        return result;
+    }
+
+    static std::string trim_string(const std::string & string) {
+        size_t start = string.find_first_not_of(" \t\n\r\f\v");
+        size_t end   = string.find_last_not_of(" \t\n\r\f\v");
+        if (start == std::string::npos || end == std::string::npos) {
+            return "";
+        }
+        return string.substr(start, end - start + 1);
+    };
+};
+
+};  // namespace utils
+#endif

@@ -5,12 +5,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <filesystem>
 
 // System (POSIX)
 #include <glob.h>
@@ -19,8 +22,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+
+#include "options.hpp"
+#include "utils.h"
+
 // Third-party
 #include "ini.h"
+#include "PluginManager.hpp"
 #include "ProcessManager.hpp"
 
 class SimpleShell {
@@ -55,7 +63,7 @@ class SimpleShell {
     }
 
   private:
-    inline const static std::string dangerous_chars = " &|<>()$\\`'\"";
+    std::shared_ptr<PluginManager> plugin_manager = nullptr;
 
     enum variable_type : std::uint8_t {
         // internal variable
@@ -85,13 +93,23 @@ class SimpleShell {
         }
     };
 
+    enum conf_variable_format_type : std::uint8_t { SL_CONF_VAR_ESCAPED, SL_CONF_VAR_QUOTED };
+
     struct conf_variable {
-        std::string key;
-        std::string value;
+        std::string               key;
+        std::string               value;
+        conf_variable_format_type format_type = SL_CONF_VAR_ESCAPED;
 
         conf_variable(const std::string & key, const std::string & value) : key(key), value(value) {
             if (key.empty()) {
                 throw std::invalid_argument("key cannot be empty");
+            }
+            if (value.substr(0, 1) == "\"" || value.substr(0, 1) == "'") {
+                format_type = SL_CONF_VAR_QUOTED;
+                this->value = value.substr(1, value.length() - 2);
+            } else {
+                format_type = SL_CONF_VAR_ESCAPED;
+                this->value = utils::ConfigUtils::unescape(value);
             }
         }
 
@@ -116,18 +134,15 @@ class SimpleShell {
         { "FONT_REVERSED",  "\033[7m"  }
     };
 
-    static SimpleShell *                         instance;
-    ProcessManager                               process_manager_;
-    std::string                                  prompt_;
-    std::string                                  prompt_format_ = "[$PWD]$ ";
-    std::vector<env_variable>                    shell_variables_;
-    std::unordered_map<std::string, config_pair> config_map_;
-    std::string                                  home_directory_;
-    std::map<pid_t, std::string>                 stopped_jobs_;
-    std::map<pid_t, std::string>                 running_processes_;
-
-    // Util
-    static std::string trim_string(const std::string & string);
+    static SimpleShell *               instance;
+    ProcessManager                     process_manager_;
+    std::string                        prompt_;
+    std::string                        prompt_format_ = "[$PWD]$ ";
+    std::vector<env_variable>          shell_variables_;
+    std::map<std::string, config_pair> config_map_;
+    std::string                        home_directory_;
+    std::map<pid_t, std::string>       stopped_jobs_;
+    std::map<pid_t, std::string>       running_processes_;
 
     static std::string exec_shell_command(const std::string & command) {
         char        buffer[128];
@@ -186,32 +201,50 @@ class SimpleShell {
                 pos += home.length();
             }
         }
-        // replace * with the current directory files
-        std::string current_dir = getenv("PWD");
-        if (!current_dir.empty()) {
-            std::regex  pattern(R"(\*\.[a-zA-Z0-9*]+|(\*))");
-            std::smatch matches;
+        return original_input;
+    }
 
-            while (std::regex_search(input, matches, pattern)) {
-                for (const auto & match : matches) {
-                    if (match.str().empty()) {
-                        continue;
-                    }
-                    std::string matched_str = match.str();
-                    std::string pattern     = current_dir;
-                    pattern.append("/");
-                    pattern.append(matched_str);
-                    std::string files = glob_files(pattern, current_dir + "/");
+    static std::vector<std::string> replace_stars(const std::vector<std::string> & args) {
+        std::vector<std::string> result;
+        const std::string        current_dir = getenv("PWD");
 
-                    size_t pos = input.find(matched_str);
-                    if (pos != std::string::npos) {
-                        input.replace(pos, matched_str.length(), files);
-                        //std::cout << "Replaced: " << matched_str << " with " << files << '\n';
+        for (const auto & s : args) {
+            const auto _pos = s.find('*');
+            if (_pos != std::string::npos) {
+                if (_pos > 0 && s.substr(_pos - 1, 1) == "\\") {
+                    result.push_back(s);
+                    continue;
+                }
+                if (_pos > 0 && s.substr(_pos - 1, 1) == "\"") {
+                    result.push_back(s);
+                    continue;
+                }
+                std::string base_path = current_dir;
+                std::string pattern   = s;
+
+                if (s.find('/') != std::string::npos) {
+                    std::filesystem::path p(s);
+                    pattern   = p.filename().string();
+                    base_path = p.parent_path().string();
+                    if (base_path.empty()) {
+                        base_path = current_dir;
                     }
                 }
+
+                std::string matched_files = glob_files(pattern, base_path);
+
+
+                std::istringstream iss(matched_files);
+                std::string        token;
+                while (iss >> std::quoted(token)) {
+                    result.push_back(token);
+                }
+            } else {
+                result.push_back(s);
             }
         }
-        return original_input;
+
+        return result;
     }
 
     static void replace_colors(std::string & input) {
@@ -247,6 +280,22 @@ class SimpleShell {
                                                 const std::string & default_value = "");
     std::vector<conf_variable> config_get_section_variables(const std::string & section);
 
+    std::unordered_map<std::string, bool> config_get_plugins_enabled() {
+        std::unordered_map<std::string, bool> plugins;
+        for (const auto & cfg_key : this->config_get_section_variables("plugins")) {
+            const auto & plugin_name = cfg_key.key;
+            const auto & plugin_cfg  = cfg_key.value;
+            if (plugin_name.empty() || plugin_cfg.empty()) {
+                continue;
+            }
+            plugins[plugin_name] = plugin_cfg == "true";
+        }
+        return plugins;
+    }
+
+    void config_set_section_variable(const std::string & section, const std::string & key, const std::string & value,
+                                     bool flush = false);
+
     void loadEnvironmentVariables() {
         for (char ** env = environ; *env != nullptr; ++env) {
             std::string env_var(*env);
@@ -271,6 +320,29 @@ class SimpleShell {
         if (ini_parse(configFilePath.c_str(), config_handler, this) < 0) {
             std::cerr << "Failed to read configuration file: " << configFilePath << '\n';
         }
+    }
+
+    void writeConfig() {
+        std::string   configFilePath = std::string(this->home_directory_) + "/.pshell";
+        std::ofstream configFile(configFilePath);
+        if (!configFile.is_open()) {
+            std::cerr << "Failed to open configuration file for writing: " << configFilePath << '\n';
+            return;
+        }
+
+        for (const auto & var : this->config_map_) {
+            configFile << "[" << var.first << "]\n";
+            for (const auto & var2 : var.second) {
+                if (var2.second.format_type == conf_variable_format_type::SL_CONF_VAR_ESCAPED) {
+                    configFile << var2.second.key << " = " << utils::ConfigUtils::escape(var2.second.value) << "\n";
+                } else {
+                    configFile << var2.second.key << " = \"" << var2.second.value << "\"\n";
+                }
+            }
+            configFile << "\n";
+        }
+
+        configFile.close();
     }
 
     static void handle_sigchld(const int & /*signal*/) { ProcessManager::handle_completed_processes(); }
@@ -329,7 +401,7 @@ class SimpleShell {
             perror("cd");
         } else {
             path = std::string(getcwd(nullptr, 0));
-            this->env_set("PWD", path, SimpleShell::variable_type::SL_VAR_ENVIRONMENT);
+            this->env_set("PWD", path, SimpleShell::variable_type::SL_VAR_GLOBAL);
         }
     }
 
@@ -342,8 +414,8 @@ class SimpleShell {
 
     void alias(const std::vector<std::string> & args) {
         if (args.size() < 1) {
-            for (const auto & [alias, command] : this->config_get_section_variables("aliases")) {
-                std::cout << alias << " = " << command << '\n';
+            for (const auto & cfg : this->config_get_section_variables("aliases")) {
+                std::cout << cfg.key << " = " << cfg.value << '\n';
             }
             return;
         }
@@ -377,22 +449,37 @@ class SimpleShell {
         ProcessManager::process_handle_foreground(pid, getpgrp());
     }
 
-    static std::string escape_shell_characters(const std::string & input) {
-        std::ostringstream escaped;
-
-        for (char c : input) {
-            // Ha a karakter veszélyes, escape-eljük
-            if (dangerous_chars.find(c) != std::string::npos || c == ' ') {
-                escaped << '\\' << c;
-            } else {
-                escaped << c;
-            }
+    static void plugins(const std::vector<std::string> & args) {
+        if (args.size() < 2) {
+            std::cout << "Usage: plugins [list|enable|disable|reload]\n";
+            return;
         }
-
-        return escaped.str();
+        auto * isntance = SimpleShell::instance;
+        if (args[1] == "list") {
+            std::cout << "Plugin name \t\t | enabled\t \n";
+            for (const auto & plugin : instance->plugin_manager->getPlugins()) {
+                std::cout << plugin.first << " \t|" << plugin.second.enabled << "\n";
+            }
+            return;
+        }
+        if (args[1] == "enable" && args.size() == 3) {
+            instance->plugin_manager->enablePlugin(args[2]);
+            instance->config_set_section_variable("plugins", args[2], "true");
+            return;
+        }
+        if (args[1] == "disable" && args.size() == 3) {
+            instance->plugin_manager->disablePlugin(args[2]);
+            instance->config_set_section_variable("plugins", args[2], "false");
+            return;
+        }
+        if (args[1] == "reload" && args.size() == 2) {
+            instance->plugin_manager->loadPlugins(instance->config_get_plugins_enabled());
+            return;
+        }
     }
 
     [[nodiscard]] static std::string glob_files(const std::string & pattern, const std::string & base_path = "") {
+        std::cout << "Globbing: " << pattern << " Base path: " << base_path << '\n';
         // glob struct resides on the stack
         glob_t glob_result;
         memset(&glob_result, 0, sizeof(glob_result));
@@ -414,13 +501,13 @@ class SimpleShell {
                     p = p.substr(base_path.size());
                 }
             }
-            filenames.append(SimpleShell::escape_shell_characters(p));
+            filenames.append(utils::ConfigUtils::escape(p));
             filenames.append(" ");
         }
         filenames = filenames.substr(0, filenames.size() - 1);
         // cleanup
         globfree(&glob_result);
-
+        std::cout << "Filenames: " << filenames << '\n';
         // done
         return filenames;
     }

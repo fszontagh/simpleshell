@@ -7,7 +7,7 @@ SimpleShell * SimpleShell::instance = nullptr;
 
 SimpleShell::SimpleShell() : prompt_("$ ") {
     SimpleShell::instance = this;
-    const char * homeDir   = getenv("HOME");
+    const char * homeDir  = getenv("HOME");
 
     if (homeDir == nullptr) {
         std::cerr << "HOME directory not found." << '\n';
@@ -15,9 +15,12 @@ SimpleShell::SimpleShell() : prompt_("$ ") {
     }
 
     this->home_directory_ = std::string(homeDir);
+    this->plugin_manager  = std::make_shared<PluginManager>(PLUGINS_DIR);
 
     this->readConfig();
     this->loadEnvironmentVariables();
+
+    this->plugin_manager->loadPlugins(instance->config_get_plugins_enabled());
     this->parse_variables();
     this->format_prompt();
     read_history((std::string(this->home_directory_) + "/.pshell_history").c_str());
@@ -62,9 +65,9 @@ void SimpleShell::parse_variables() {
             continue;
         }
         // clean up
-        entry.key            = trim_string(entry.key);
-        entry.value          = trim_string(entry.value);
-        entry.original_value = trim_string(entry.original_value);
+        //entry.key            = utils::ConfigUtils::trim_string(entry.key);
+        //entry.value          = utils::ConfigUtils::trim_string(entry.value);
+        //entry.original_value = utils::ConfigUtils::trim_string(entry.original_value);
 
         if (entry.original_value.find('`') != std::string::npos) {
             std::string command = entry.original_value;
@@ -73,7 +76,7 @@ void SimpleShell::parse_variables() {
             command.erase(command.length() - 1);
             auto result = exec_shell_command(command);
             if (!result.empty()) {
-                entry.value = trim_string(result);
+                entry.value = utils::ConfigUtils::trim_string(result);
             }
         }
     }
@@ -130,7 +133,9 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
     }
 }
 
-SimpleShell::~SimpleShell() {}
+SimpleShell::~SimpleShell() {
+    this->writeConfig();
+}
 
 void SimpleShell::execute_command(const std::string & command) {
     std::stringstream        ss(command);
@@ -159,9 +164,14 @@ void SimpleShell::execute_command(const std::string & command) {
             }
             alias_args.insert(alias_args.end(), args.begin() + 1, args.end());
             args = alias_args;
+
+            instance->plugin_manager->call("OnAlias", { "", alias.key, alias.value });
             break;
         }
     }
+
+    args = SimpleShell::replace_stars(args);
+    instance->plugin_manager->call("OnCommand", { "", args[0], command });
 
     if (args[0] == "echo") {
         SimpleShell::echo(args);
@@ -188,6 +198,10 @@ void SimpleShell::execute_command(const std::string & command) {
         return;
     }
 
+    if (args[0] == "plugins") {
+        SimpleShell::plugins(args);
+        return;
+    }
     if (args[0] == "fg") {
         SimpleShell::fg(args);
         return;
@@ -233,44 +247,40 @@ void SimpleShell::execute_command(const std::string & command) {
         run_in_background = true;
         args.pop_back();
         std::cout << "Running in background: " << command << '\n';
+        instance->plugin_manager->call("OnRunBackground", { "", args[0], command });
+    }else{
+        instance->plugin_manager->call("OnRunForeground", { "", args[0], command });
     }
 
     ProcessManager::start_process(args, run_in_background);
+    instance->plugin_manager->call("OnFinish", { "", args[0], command });
 }
 
-
 void SimpleShell::format_prompt() {
+
     this->prompt_ = this->prompt_format_ = this->config_get_value("shell", "prompt_format", this->prompt_format_);
+
+    instance->plugin_manager->call("OnBeforePromptFormat", { "", this->prompt_ });
+
     SimpleShell::replace_colors(this->prompt_);
     SimpleShell::replace_variables(this->prompt_);
 }
 
-std::string SimpleShell::trim_string(const std::string & string) {
-    size_t start = string.find_first_not_of(" \t\n\r\f\v");
-    size_t end   = string.find_last_not_of(" \t\n\r\f\v");
-    if (start == std::string::npos || end == std::string::npos) {
-        return "";
-    }
-    return string.substr(start, end - start + 1);
-}
-
 int SimpleShell::config_handler(void * user, const char * section, const char * name, const char * value) {
     SimpleShell * shell = static_cast<SimpleShell *>(user);
-    std::string   val   = value;
-    if (!val.empty() && val.front() == '"' && val.back() == '"') {
-        val = val.substr(1, val.length() - 2);
+    if (shell == nullptr) {
+        return 0;
     }
-
     std::string section_str(section);
     std::string name_str(name);
 
-    conf_variable var(name_str, val);
+    conf_variable var(name_str, value);
 
     if (shell->config_map_.find(section_str) == shell->config_map_.end()) {
         shell->config_map_[section_str] = std::map<std::string, conf_variable>();
     }
     auto & cfg_section    = shell->config_map_[section_str];
-    cfg_section[name_str] = conf_variable(name_str, val);
+    cfg_section[name_str] = std::move(var);
     return 1;
 }
 
@@ -309,6 +319,18 @@ std::vector<SimpleShell::conf_variable> SimpleShell::config_get_section_variable
         return variables;
     }
     return {};
+}
+
+void SimpleShell::config_set_section_variable(const std::string & section, const std::string & key,
+                                              const std::string & value, bool flush) {
+    if (this->config_map_.find(section) == this->config_map_.end()) {
+        this->config_map_[section] = std::map<std::string, conf_variable>();
+    }
+    auto & cfg_section = this->config_map_[section];
+    cfg_section[key]   = conf_variable(key, value);
+    if (flush) {
+        this->writeConfig();
+    }
 }
 
 void SimpleShell::env_set(const std::string & key, const std::string & value, SimpleShell::variable_type type) {

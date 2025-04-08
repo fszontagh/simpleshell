@@ -1,0 +1,8 @@
+#cmakedefine DEBUG @DEBUG@
+#cmakedefine CMAKE_PROJECT_VERSION "@CMAKE_PROJECT_VERSION@"
+#cmakedefine LUA_VERSION "@LUA_VERSION@"
+#ifndef DEBUG
+#cmakedefine PLUGINS_DIR "@PLUGINS_DIR@"
+#else
+#cmakedefine PLUGINS_DIR "@CMAKE_BINARY_DIR@/plugins"
+#endif

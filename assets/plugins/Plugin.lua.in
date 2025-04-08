@@ -1,0 +1,68 @@
+--- @module base
+
+local Plugin = {}
+Plugin.__index = Plugin
+
+-- Protected fields (non-writable)
+local protected = {
+    projectVersion = "@CMAKE_PROJECT_VERSION@",
+    projectName = "@PROJECT_NAME@",
+    pluginsDir = "@PLUGINS_DIR@",
+    currentDir = ""
+}
+
+-- Getter
+function Plugin:get(key)
+    return protected[key]
+end
+
+-- Abstract method that must be overridden
+function Plugin:OnBeforePromptFormat(prompt)
+    error("OnBeforePromptFormat(prompt) must be overridden in the derived plugin")
+end
+function Plugin:OnAfterPromptFormat(prompt)
+    error("OnAfterPromptFormat(prompt) must be overridden in the derived plugin")
+end
+
+function Plugin:OnCommand(command, fullCommand)
+    return ""
+end
+
+function Plugin:OnFinish(command, fullCommand)
+    return ""
+end
+
+function Plugin:OnRunForeground(command, fullCommand)
+    return ""
+end
+
+function Plugin:OnRunBackground(command, fullCommand)
+    return ""
+end
+
+function Plugin:init()
+    error("init() must be overridden in the derived plugin")
+end
+
+-- Constructor
+function Plugin:new(o)
+    o = o or {}
+    setmetatable(o, self)
+
+    -- Enforce read-only access to protected fields
+    return setmetatable({}, {
+        __index = function(_, k)
+            if protected[k] ~= nil then return protected[k] end
+            return o[k] or Plugin[k]
+        end,
+        __newindex = function(_, k, v)
+            if protected[k] ~= nil then
+                error("Attempt to modify protected field: " .. k)
+            else
+                rawset(o, k, v)
+            end
+        end
+    })
+end
+
+return Plugin

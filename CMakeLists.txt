@@ -17,6 +17,8 @@ message(STATUS "CPACK_SOURCE_GENERATOR: ${CPACK_SOURCE_GENERATOR}")
 if (CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE Release)
     message(STATUS "CMAKE_BUILD_TYPE is not set, defaulting to Release")
+    else()
+    set(DEBUG 1)
 endif()
 
 
@@ -56,6 +58,7 @@ endif()
 
 include(FetchContent)
 
+###  inih
 FetchContent_Declare(
     inih
     GIT_REPOSITORY https://github.com/benhoyt/inih.git
@@ -73,17 +76,32 @@ add_library(inih STATIC
 )
 target_include_directories(inih PUBLIC ${inih_SOURCE_DIR})
 
+### SOL
+include(FetchContent)
+
+FetchContent_Declare(
+    sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+    GIT_TAG        v3.3.0
+)
+
+FetchContent_MakeAvailable(sol2)
+FetchContent_GetProperties(sol2)
+if(NOT sol2_POPULATED)
+    FetchContent_Populate(sol2)
+endif()
+
+
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(readline readline REQUIRED)
-pkg_check_modules(LUA REQUIRED lua5.3)
 
-include_directories(${inih_SOURCE_DIR})
+find_package(Lua REQUIRED)
 
-add_executable(${BINARY_NAME} src/main.cpp src/SimpleShell.cpp ${inih_SOURCE_DIR}/ini.c)
+add_executable(${BINARY_NAME} src/main.cpp src/SimpleShell.cpp src/PluginManager.cpp ${inih_SOURCE_DIR}/ini.c)
 
-target_link_libraries(${BINARY_NAME} inih readline)
-
+target_link_libraries(${BINARY_NAME} inih readline ${LUA_LIBRARIES})
+target_include_directories(${BINARY_NAME} PRIVATE ${inih_SOURCE_DIR} ${LUA_INCLUDE_DIR} ${CMAKE_BINARY_DIR}/include ${sol2_SOURCE_DIR}/include)
 
 
 
@@ -93,11 +111,14 @@ endif()
 
 include(GNUInstallDirs)
 
+set("PLUGINS_DIR" "${CMAKE_INSTALL_FULL_DATAROOTDIR}/simpleshell/plugins")
 # install
-message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
-message(STATUS "CMAKE_INSTALL_BINDIR: ${CMAKE_INSTALL_BINDIR}")
-message(STATUS "CMAKE_INSTALL_SYSCONFDIR: ${CMAKE_INSTALL_SYSCONFDIR}")
-message(STATUS "CMAKE_INSTALL_DATAROOTDIR: ${CMAKE_INSTALL_DATAROOTDIR}")
+message(STATUS "Plugins directory: ${PLUGINS_DIR}")
+
+
+configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/Plugin.lua.in ${CMAKE_BINARY_DIR}/plugins/base/Plugin.lua @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
+configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/Example.lua ${CMAKE_BINARY_DIR}/plugins/Example.lua COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+configure_file(${CMAKE_SOURCE_DIR}/config/options.h.in ${CMAKE_BINARY_DIR}/include/options.hpp @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
 
 install(TARGETS ${BINARY_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/config/.pshell DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/skel)
