@@ -85,11 +85,10 @@ FetchContent_Declare(
     GIT_TAG        v3.3.0
 )
 
-FetchContent_MakeAvailable(sol2)
-FetchContent_GetProperties(sol2)
 if(NOT sol2_POPULATED)
     FetchContent_Populate(sol2)
 endif()
+set(sol2_EXCLUDE_FROM_ALL TRUE)
 
 
 
@@ -123,5 +122,6 @@ configure_file(${CMAKE_SOURCE_DIR}/config/options.h.in ${CMAKE_BINARY_DIR}/inclu
 install(TARGETS ${BINARY_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/config/.pshell DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/skel)
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/simpleshell)
+install(DIRECTORY ${CMAKE_BINARY_DIR}/plugins DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/simpleshell)
 
 include(CPack)
