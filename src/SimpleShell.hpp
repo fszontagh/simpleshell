@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -13,7 +14,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <filesystem>
 
 // System (POSIX)
 #include <glob.h>
@@ -21,7 +21,6 @@
 #include <readline/readline.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
 
 #include "options.hpp"
 #include "utils.h"
@@ -35,6 +34,8 @@ class SimpleShell {
   public:
     SimpleShell();
     ~SimpleShell();
+
+    using BuiltInCommand = void (*)(const std::vector<std::string> &);
 
     void run(const std::string & maybefile = "", const std::vector<std::string> & params = {});
 
@@ -134,15 +135,242 @@ class SimpleShell {
         { "FONT_REVERSED",  "\033[7m"  }
     };
 
-    static SimpleShell *               instance;
-    ProcessManager                     process_manager_;
-    std::string                        prompt_;
-    std::string                        prompt_format_ = "[$PWD]$ ";
-    std::vector<env_variable>          shell_variables_;
-    std::map<std::string, config_pair> config_map_;
-    std::string                        home_directory_;
-    std::map<pid_t, std::string>       stopped_jobs_;
-    std::map<pid_t, std::string>       running_processes_;
+    struct system_binaries {
+        std::string                        full_path;
+        std::string                        bin;
+        std::map<std::string, std::string> params;
+    };
+
+    static std::optional<system_binaries> find_by_bin_or_path(
+        const std::unordered_map<std::string, system_binaries> & map, const std::string & query,
+        const std::string & param = "") {
+        for (const auto & [key, value] : map) {
+            if (value.bin == query || value.full_path == query) {
+                if (param.empty()) {
+                    return value;
+                }
+                if (value.params.contains(param)) {
+                    return value;
+                }
+                return value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    enum custom_command_type : std::uint8_t {
+        SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+        SL_CUSTOM_COMMAND_TYPE_PLUGIN,
+        SL_CUSTOM_COMMAND_TYPE_ALIAS,
+        SL_CUSTOM_COMMAND_TYPE_NONE,
+    };
+
+    struct custom_command_params {
+        std::string name;
+        std::string description;
+
+        std::string toString() const { return name + "\n" + description; }
+
+        custom_command_params(const std::string & from_string) {
+            const auto r = utils::ConfigUtils::SplitAtFirstNewline(from_string);
+            name         = r.first;
+            description  = r.second;
+        }
+
+        custom_command_params(const std::string & name, const std ::string & description) :
+            name(name),
+            description(description) {}
+
+        custom_command_params() = default;
+    };
+
+    struct custom_command {
+        std::string                        command;
+        std::vector<custom_command_params> params;
+        std::string                        description;
+        custom_command_type                type            = SL_CUSTOM_COMMAND_TYPE_NONE;
+        BuiltInCommand                     builtin_command = nullptr;
+
+        void ParamsFromVector(const std::vector<std::string> & params) {
+            for (const auto & param : params) {
+                this->params.push_back(custom_command_params(param));
+            }
+        }
+
+        std::string GetFormattedHelp() const {
+            std::stringstream ss;
+            ss << "Command: " << command << "\n";
+            ss << "Description: " << description << "\n";
+            if (params.size() > 0) {
+                ss << "Params: \n";
+                for (const auto & param : params) {
+                    ss << "\t  - " << param.name << "\t\t  " << param.description << "\n";
+                }
+            }
+            return ss.str();
+        }
+    };
+
+    std::unordered_map<std::string, custom_command> custom_commands_{
+        { "cd",
+         custom_command{ "cd", {}, "Change current directory", SL_CUSTOM_COMMAND_TYPE_BUILTIN, SimpleShell::cd }        },
+        { "echo",
+         custom_command{ "echo", {}, "Print out a string", SL_CUSTOM_COMMAND_TYPE_BUILTIN, SimpleShell::echo }          },
+        { "env",           custom_command{ "env",
+                                 {},
+                                 "Print out the environment variables",
+                                 SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+                                 SimpleShell::echo }                                                    },
+        { "jobs",          custom_command{ "jobs", {}, "Show jobs", SL_CUSTOM_COMMAND_TYPE_BUILTIN, SimpleShell::jobs } },
+        { "plugins",       custom_command{ "plugins",
+                                     { custom_command_params{ "list", "List available plugins" },
+                                       custom_command_params{ "disable <plugin id>", "Disable plugin with id" },
+                                       custom_command_params{ "list", "List available plugins" },
+                                       custom_command_params{ "reload", "Reload plugins" } },
+                                     "Manage the plugins",
+                                     SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+                                     SimpleShell::plugins }                                         },
+        { "aliases",
+         custom_command{ "aliases",
+                          { custom_command_params{ "add <alias_name> <command>", "Add a new alias" },
+                            custom_command_params{ "delete <alias_name>", "Delete alias with name <alias_name>" },
+                            custom_command_params{ "list", "List all configured alias" } },
+                          "Show jobs",
+                          SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+                          SimpleShell::alias }                                                                          },
+
+        { "bg",
+         custom_command{ "bg", {}, "Send to the background a job", SL_CUSTOM_COMMAND_TYPE_BUILTIN, SimpleShell::bg }    },
+        { "fg",
+         custom_command{
+              "fg",
+              { { "job_id",
+                  "The job id to bring into the foreground. If ommitted, the last available job will be used" } },
+              "Bring back to the foreground a job",
+              SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+              SimpleShell::bg }                                                                                         },
+        { "reload_config",
+         custom_command{
+              "reload_config",
+              {},
+              "Re-read the configuration file and reload it's contents. WARN: all not saved changes will be lost",
+              SL_CUSTOM_COMMAND_TYPE_BUILTIN,
+              SimpleShell::reload_config }                                                                              },
+    };
+    static SimpleShell *                             instance;
+    ProcessManager                                   process_manager_;
+    std::string                                      prompt_;
+    std::string                                      prompt_format_ = "[$PWD]$ ";
+    std::vector<env_variable>                        shell_variables_;
+    std::map<std::string, config_pair>               config_map_;
+    std::string                                      home_directory_;
+    std::map<pid_t, std::string>                     stopped_jobs_;
+    std::map<pid_t, std::string>                     running_processes_;
+    std::vector<std::string>                         vocabulary{ "cat", "dog", "canary", "cow", "hamster" };
+    std::unordered_map<std::string, system_binaries> system_binaries_;
+
+    system_binaries parse_params_from_help(SimpleShell::system_binaries & bin_info) {
+        if (bin_info.full_path.empty()) {
+            return bin_info;
+        }
+        std::string bin_path   = bin_info.full_path;
+        // Extract binary name from path
+        size_t      last_slash = bin_path.find_last_of('/');
+        bin_info.bin           = (last_slash != std::string::npos) ? bin_path.substr(last_slash + 1) : bin_path;
+
+        FILE * fp = popen((bin_path + " --help 2>&1").c_str(), "r");
+        if (!fp) {
+            return bin_info;
+        }
+
+        char               buffer[4096];
+        std::ostringstream help_output;
+        while (fgets(buffer, sizeof(buffer), fp)) {
+            help_output << buffer;
+        }
+        pclose(fp);
+
+        std::istringstream stream(help_output.str());
+        std::string        line;
+
+        std::regex option_regex(R"((-\w|--[a-zA-Z0-9-]+)(,\s*-\w|,\s*--[a-zA-Z0-9-]+)?\s+(.*))");
+
+        while (std::getline(stream, line)) {
+            std::smatch match;
+            if (std::regex_match(line, match, option_regex)) {
+                std::string opt1 = match[1];
+                std::string opt2 = match[2].str();
+                std::string desc = match[3];
+                if (!opt1.empty()) {
+                    bin_info.params[opt1] = desc;
+                }
+                if (!opt2.empty()) {
+                    // clean ", " prefix
+                    opt2.erase(0, opt2.find_first_not_of(", "));
+                    bin_info.params[opt2] = desc;
+                }
+            }
+        }
+
+        return bin_info;
+    }
+
+    static char * completion_generator(const char * text, int state) {
+        static std::vector<std::string> matches;
+        static size_t                   match_index  = 0;
+        std::string                     current_text = rl_line_buffer;
+
+        if (state == 0) {
+            // During initialization, compute the actual matches for 'text' and keep
+            // them in a static vector.
+            matches.clear();
+            match_index         = 0;
+            std::string textstr = std::string(text);
+
+            if (current_text.size() > 0 && current_text.back() == ' ') {
+                auto result = find_by_bin_or_path(instance->system_binaries_, current_text, textstr);
+
+                if (result.has_value()) {
+                    matches.push_back(result.value().bin);
+                }
+                for (const auto & builtIn : instance->custom_commands_) {
+                    if (builtIn.first.size() >= textstr.size() &&
+                        builtIn.first.compare(0, textstr.size(), textstr) == 0) {
+                        matches.push_back(builtIn.first);
+                    }
+                }
+            } else {
+                // Collect a vector of matches: vocabulary words that begin with text.
+
+                for (const auto & word : instance->vocabulary) {
+                    if (word.size() >= textstr.size() && word.compare(0, textstr.size(), textstr) == 0) {
+                        matches.push_back(word);
+                    }
+                }
+                for (const auto & word : instance->system_binaries_) {
+                    if (word.second.bin.size() >= textstr.size() &&
+                        word.second.bin.compare(0, textstr.size(), textstr) == 0) {
+                        matches.push_back(word.second.bin);
+                    }
+                }
+            }
+        }
+
+        if (match_index >= matches.size()) {
+            // We return nullptr to notify the caller no more matches are available.
+            return nullptr;
+        }  // Return a malloc'd char* for the match. The caller frees it.
+        return strdup(matches[match_index++].c_str());
+    }
+
+    static char ** rl_completion(const char * text, int start, int end) {
+        // Don't do filename completion even if our generator finds no matches.
+        //rl_attempted_completion_over = 1;
+
+        return rl_completion_matches(text, SimpleShell::completion_generator);
+    }
+
+    void LoadSystemBinaries();
 
     static std::string exec_shell_command(const std::string & command) {
         char        buffer[128];
@@ -228,11 +456,14 @@ class SimpleShell {
                     base_path = p.parent_path().string();
                     if (base_path.empty()) {
                         base_path = current_dir;
+                    } else {
+                        base_path.insert(0, current_dir + "/");
                     }
                 }
-
-                std::string matched_files = glob_files(pattern, base_path);
-
+                std::string pattern_with_wildcard = base_path;
+                pattern_with_wildcard += "/";
+                pattern_with_wildcard += pattern;
+                std::string matched_files = glob_files(pattern_with_wildcard, base_path + "/");
 
                 std::istringstream iss(matched_files);
                 std::string        token;
@@ -280,6 +511,11 @@ class SimpleShell {
                                                 const std::string & default_value = "");
     std::vector<conf_variable> config_get_section_variables(const std::string & section);
 
+    bool custom_command_add(const std::string & command, const std::vector<std::string> & params,
+                            const std::string & description, const SimpleShell::custom_command_type & type) const;
+
+    bool custom_command_add(const SimpleShell::custom_command & command);
+
     std::unordered_map<std::string, bool> config_get_plugins_enabled() {
         std::unordered_map<std::string, bool> plugins;
         for (const auto & cfg_key : this->config_get_section_variables("plugins")) {
@@ -295,6 +531,21 @@ class SimpleShell {
 
     void config_set_section_variable(const std::string & section, const std::string & key, const std::string & value,
                                      bool flush = false);
+
+    bool config_delete_section_variable(const std::string & section, const std::string & key, bool flush = false) {
+        if (this->config_map_.contains(section)) {
+            auto & section_map = this->config_map_.at(section);
+            if (section_map.contains(key)) {
+                section_map.erase(key);
+
+                if (flush) {
+                    this->writeConfig();
+                }
+                return true;
+            }
+        }
+        return false;
+    }
 
     void loadEnvironmentVariables() {
         for (char ** env = environ; *env != nullptr; ++env) {
@@ -378,15 +629,15 @@ class SimpleShell {
 
     void execute_command(const std::string & command);
 
-    void reload_config() {
-        this->readConfig();
-        this->loadEnvironmentVariables();
-        this->parse_variables();
-        this->format_prompt();
+    static void reload_config(const std::vector<std::string> & /*args*/) {
+        instance->readConfig();
+        instance->loadEnvironmentVariables();
+        instance->parse_variables();
+        instance->format_prompt();
         std::cout << "Configuration reloaded." << '\n';
     }
 
-    void cd(const std::vector<std::string> & args) {
+    static void cd(const std::vector<std::string> & args) {
         if (args.empty()) {
             std::cerr << "cd: missing argument" << '\n';
             return;
@@ -401,7 +652,7 @@ class SimpleShell {
             perror("cd");
         } else {
             path = std::string(getcwd(nullptr, 0));
-            this->env_set("PWD", path, SimpleShell::variable_type::SL_VAR_GLOBAL);
+            instance->env_set("PWD", path, SimpleShell::variable_type::SL_VAR_GLOBAL);
         }
     }
 
@@ -412,12 +663,36 @@ class SimpleShell {
         std::cout << '\n';
     }
 
-    void alias(const std::vector<std::string> & args) {
-        if (args.size() < 1) {
-            for (const auto & cfg : this->config_get_section_variables("aliases")) {
+    static void alias(const std::vector<std::string> & args) {
+        if (args.size() < 2 || args[1] == "list") {
+            for (const auto & cfg : instance->config_get_section_variables("aliases")) {
                 std::cout << cfg.key << " = " << cfg.value << '\n';
             }
             return;
+        }
+        if (args.size() > 2 && args[1] == "add") {
+            instance->config_set_section_variable("aliases", args[2], args[3], true);
+            std::cout << "alias " << args[2] << " added" << '\n';
+            return;
+        }
+        if (args.size() > 2 && args[1] == "delete") {
+            if (instance->config_delete_section_variable("aliases", args[2])) {
+                std::cout << "alias " << args[2] << " deleted" << '\n';
+            } else {
+                std::cerr << "alias " << args[2] << " not found" << '\n';
+            }
+        }
+    }
+
+    static void unalias(const std::vector<std::string> & args) {
+        if (args.size() < 2) {
+            std::cerr << "unalias: missing argument" << '\n';
+            return;
+        }
+        if (instance->config_delete_section_variable("aliases", args[1])) {
+            std::cout << "alias " << args[1] << " deleted" << '\n';
+        } else {
+            std::cerr << "alias " << args[1] << " not found" << '\n';
         }
     }
 
@@ -456,9 +731,16 @@ class SimpleShell {
         }
         auto * isntance = SimpleShell::instance;
         if (args[1] == "list") {
-            std::cout << "Plugin name \t\t | enabled\t \n";
             for (const auto & plugin : instance->plugin_manager->getPlugins()) {
-                std::cout << plugin.first << " \t|" << plugin.second.enabled << "\n";
+                std::cout << "ID: " << plugin.first << "\t\t";
+                std::cout << "Name: " << plugin.second.displayName << '\t';
+                std::cout << "Status: " << (plugin.second.enabled ? "active" : "disabled") << '\n';
+                if (plugin.second.description.empty()) {
+                    std::cout << "No description available.\n";
+                } else {
+                    std::cout << plugin.second.description << '\n';
+                }
+                std::cout << "-------------------------------------\n";
             }
             return;
         }
@@ -476,6 +758,32 @@ class SimpleShell {
             instance->plugin_manager->loadPlugins(instance->config_get_plugins_enabled());
             return;
         }
+    }
+
+    static void jobs(const std::vector<std::string> & args) {
+        const auto n_stopped = ProcessManager::instance().get_stopped_processes_count();
+        const auto n_running = ProcessManager::instance().get_running_processes_count();
+
+        std::cout << "Running processes: " << n_running << "\n";
+
+        if (n_running > 0) {
+            for (const auto & process : ProcessManager::instance().get_running_processes()) {
+                const std::string status = ProcessManager::statusToString(process.state);
+                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
+                          << "\n";
+            }
+        }
+
+        std::cout << "Stopped jobs: " << n_stopped << "\n";
+
+        if (n_stopped > 0) {
+            for (const auto & process : ProcessManager::instance().get_stopped_processes()) {
+                const std::string status = ProcessManager::statusToString(process.state);
+                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
+                          << "\n";
+            }
+        }
+        std::cout << '\n';
     }
 
     [[nodiscard]] static std::string glob_files(const std::string & pattern, const std::string & base_path = "") {

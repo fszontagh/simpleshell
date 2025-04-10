@@ -1,0 +1,128 @@
+--- @module BasePlugin
+
+local BasePlugin = {}
+BasePlugin.__index = BasePlugin
+
+-- Protected fields (non-writable)
+local protected = {
+    projectVersion = "@CMAKE_PROJECT_VERSION@",
+    projectName = "@PROJECT_NAME@",
+    pluginsDir = "@PLUGINS_DIR@",
+    currentDir = ""
+}
+function error(message)
+    print(message)
+end
+function split_lines(str)
+    local lines = {}
+    for line in string.gmatch(str, "[^\r\n]+") do
+        table.insert(lines, line)
+    end
+    return lines
+end
+
+function string.starts(String, Start)
+    return string.sub(String, 1, string.len(Start)) == Start
+end
+
+
+-- Getter
+function BasePlugin:get(key)
+    return protected[key]
+end
+
+-- Abstract method that must be overridden
+function BasePlugin:OnBeforePromptFormat(prompt)
+    return prompt
+end
+function BasePlugin:OnAfterPromptFormat(prompt)
+    return prompt
+end
+-- Optional methods
+function BasePlugin:OnAlias(command, params)
+    return ""
+end
+
+function BasePlugin:OnCommand(command, fullCommand)
+    return ""
+end
+
+function BasePlugin:OnProcessFinish(command, fullCommand)
+    return ""
+end
+
+function BasePlugin:OnRunForeground(command, fullCommand)
+    return ""
+end
+
+function BasePlugin:OnRunBackground(command, fullCommand)
+    return ""
+end
+
+function BasePlugin:init()
+    error("init() must be overridden in the derived plugin")
+end
+
+-- Constructor
+function BasePlugin:new(o)
+    o = o or {}
+    setmetatable(o, self)
+
+    -- Enforce read-only access to protected fields
+    return setmetatable({}, {
+        __index = function(_, k)
+            if protected[k] ~= nil then return protected[k] end
+            return o[k] or BasePlugin[k]
+        end,
+        __newindex = function(_, k, v)
+            if protected[k] ~= nil then
+                error("Attempt to modify protected field: " .. k)
+            else
+                rawset(o, k, v)
+            end
+        end
+    })
+end
+
+-- helpers
+
+function BasePlugin:getPluginPath()
+    return self:get("pluginsDir") .. "/" .. self:get("projectName")
+end
+
+function BasePlugin:commandToParams(command)
+    local result = {}
+    local pattern = '([^%s"]+)"?([^"]*)"?'
+
+    local i = 1
+    while i <= #input do
+        local c = input:sub(i, i)
+        if c == '"' then
+            -- Kezdő idézőjel
+            local closing = input:find('"', i + 1)
+            if closing then
+                table.insert(result, input:sub(i + 1, closing - 1))
+                i = closing + 1
+            else
+                -- Nincs záró idézőjel, onnan a végéig mindent egyben kezelünk
+                table.insert(result, input:sub(i + 1))
+                break
+            end
+        elseif c:match("%S") then
+            local next_space = input:find("%s", i)
+            if next_space then
+                table.insert(result, input:sub(i, next_space - 1))
+                i = next_space + 1
+            else
+                table.insert(result, input:sub(i))
+                break
+            end
+        else
+            i = i + 1
+        end
+    end
+
+    return result
+end
+
+return BasePlugin

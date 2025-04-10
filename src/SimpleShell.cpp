@@ -20,10 +20,31 @@ SimpleShell::SimpleShell() : prompt_("$ ") {
     this->readConfig();
     this->loadEnvironmentVariables();
 
+    this->plugin_manager->setConfigCallback = [this](const std::string & section, const std::string & key,
+                                                     const std::string & value) {
+        this->config_set_section_variable(section, key, value, true);
+    };
+
+    this->plugin_manager->getConfigCallback = [this](const std::string & section, const std::string & key) {
+        return this->config_get_value(section, key, "");
+    };
+
+    this->plugin_manager->registerCustomCommand = [this](const std::string &              command,
+                                                         const std::vector<std::string> & params,
+                                                         const std::string &              description) -> bool {
+        return this->custom_command_add(command, params, description,
+                                        SimpleShell::custom_command_type::SL_CUSTOM_COMMAND_TYPE_PLUGIN);
+    };
+
     this->plugin_manager->loadPlugins(instance->config_get_plugins_enabled());
+
     this->parse_variables();
     this->format_prompt();
     read_history((std::string(this->home_directory_) + "/.pshell_history").c_str());
+
+    this->LoadSystemBinaries();
+
+    rl_attempted_completion_function = SimpleShell::rl_completion;
 }
 
 void SimpleShell::parse_variables() {
@@ -164,104 +185,40 @@ void SimpleShell::execute_command(const std::string & command) {
             }
             alias_args.insert(alias_args.end(), args.begin() + 1, args.end());
             args = alias_args;
-
-            instance->plugin_manager->call("OnAlias", { "", alias.key, alias.value });
             break;
         }
     }
 
     args = SimpleShell::replace_stars(args);
-    instance->plugin_manager->call("OnCommand", { "", args[0], command });
 
-    if (args[0] == "echo") {
-        SimpleShell::echo(args);
-        return;
-    }
-    if (args[0] == "cd") {
-        this->cd(args);
-        return;
-    }
-    if (args[0] == "history") {
+    if (instance->plugin_manager->OnCommand(args) == false) {
         return;
     }
 
-    if (args[0] == "export") {
-        //   this->export_variable(args);
-        return;
-    }
-    if (args[0] == "alias") {
-        this->alias(args);
-        return;
-    }
-    if (args[0] == "reload_config") {
-        this->reload_config();
-        return;
-    }
-
-    if (args[0] == "plugins") {
-        SimpleShell::plugins(args);
-        return;
-    }
-    if (args[0] == "fg") {
-        SimpleShell::fg(args);
-        return;
-    }
-    if (args[0] == "bg") {
-        SimpleShell::bg(args);
-        return;
-    }
-    if (args[0] == "env") {
-        for (const auto & env : this->get_env_variables()) {
-            std::cout << env.key << "=" << env.value << "\n";
-        }
-        return;
-    }
-    if (args[0] == "jobs") {
-        const auto n_stopped = ProcessManager::instance().get_stopped_processes_count();
-        const auto n_running = ProcessManager::instance().get_running_processes_count();
-
-        std::cout << "Running processes: " << n_running << "\n";
-
-        if (n_running > 0) {
-            for (const auto & process : ProcessManager::instance().get_running_processes()) {
-                const std::string status = ProcessManager::statusToString(process.state);
-                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
-                          << "\n";
+    for (const auto & buildInCmd : instance->custom_commands_) {
+        if (buildInCmd.first == args[0] &&
+            buildInCmd.second.type == SimpleShell::custom_command_type::SL_CUSTOM_COMMAND_TYPE_BUILTIN) {
+            if (args.size() > 1 && args[1] == "help") {
+                std::cout << buildInCmd.second.GetFormattedHelp();
+                return;
             }
+            buildInCmd.second.builtin_command(args);
+            return;
         }
-
-        std::cout << "Stopped jobs: " << n_stopped << "\n";
-
-        if (n_stopped > 0) {
-            for (const auto & process : ProcessManager::instance().get_stopped_processes()) {
-                const std::string status = ProcessManager::statusToString(process.state);
-                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
-                          << "\n";
-            }
-        }
-        std::cout << '\n';
-        return;
     }
+
     bool run_in_background = false;
     if (!args.empty() && args.back() == "&") {
         run_in_background = true;
         args.pop_back();
         std::cout << "Running in background: " << command << '\n';
-        instance->plugin_manager->call("OnRunBackground", { "", args[0], command });
-    }else{
-        instance->plugin_manager->call("OnRunForeground", { "", args[0], command });
     }
 
     ProcessManager::start_process(args, run_in_background);
-    instance->plugin_manager->call("OnFinish", { "", args[0], command });
 }
 
 void SimpleShell::format_prompt() {
-
     this->prompt_ = this->prompt_format_ = this->config_get_value("shell", "prompt_format", this->prompt_format_);
-
-    instance->plugin_manager->call("OnBeforePromptFormat", { "", this->prompt_ });
-
     SimpleShell::replace_colors(this->prompt_);
     SimpleShell::replace_variables(this->prompt_);
 }
@@ -356,4 +313,84 @@ void SimpleShell::env_set(const std::string & key, const std::string & value, Si
     if (type == SimpleShell::variable_type::SL_VAR_GLOBAL) {
         setenv(key.c_str(), value.c_str(), 1);
     }
+}
+
+void SimpleShell::LoadSystemBinaries() {
+    if (!instance) {
+        return;
+    }
+
+    const char * path_env = std::getenv("PATH");
+    if (!path_env) {
+        std::cout << "PATH environment variable not found." << std::endl;
+        return;
+    }
+
+    std::string                        path_str = path_env;
+    std::vector<std::filesystem::path> path_dirs;
+    // Split the PATH environment variable into individual directories
+    size_t                             start = 0;
+    size_t                             end   = 0;
+    while ((end = path_str.find(':', start)) != std::string::npos) {
+        path_dirs.emplace_back(path_str.substr(start, end - start));
+        start = end + 1;
+    }
+    path_dirs.emplace_back(path_str.substr(start));
+
+    for (const auto & dir : path_dirs) {
+        if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+            continue;
+        }
+
+        for (const auto & entry : std::filesystem::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            const auto & path     = entry.path();
+            std::string  filename = path.filename().string();
+
+            if (access(path.c_str(), X_OK) == 0) {
+                //
+                if (!instance->system_binaries_.contains(filename)) {
+                    SimpleShell::system_binaries info    = { path.string(), filename, {} };
+                    //instance->parse_params_from_help(info); // slow :)
+                    instance->system_binaries_[filename] = std::move(info);
+                }
+            }
+        }
+    }
+}
+
+bool SimpleShell::custom_command_add(const std::string & command, const std::vector<std::string> & params,
+                                     const std::string &                      description,
+                                     const SimpleShell::custom_command_type & type) const {
+    if (!instance) {
+        return false;
+    }
+    if (command.empty()) {
+        return false;
+    }
+    if (instance->custom_commands_.contains(command)) {
+        return false;
+    }
+
+    SimpleShell::custom_command new_command{ command, {}, description, type };
+    new_command.ParamsFromVector(params);
+    instance->custom_command_add(new_command);
+    return true;
+}
+
+bool SimpleShell::custom_command_add(const SimpleShell::custom_command & command) {
+    if (!instance) {
+        return false;
+    }
+    if (command.command.empty()) {
+        return false;
+    }
+    if (instance->custom_commands_.contains(command.command)) {
+        return false;
+    }
+    instance->custom_commands_[command.command] = command;
+    return true;
 }

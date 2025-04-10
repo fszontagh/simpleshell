@@ -1,19 +1,23 @@
 #include "PluginManager.hpp"
+
 #include <filesystem>
 
 PluginManager::PluginManager(const std::string & pluginDir) : pluginDirectory(pluginDir) {
     L.open_libraries();
     L.set_function("error", [&](const std::string & msg) { throw msg; });
+    L.set_function("print", [](const std::string & msg) { std::cout << msg << std::endl; });
+    L.set_function("print_error", [](const std::string & msg) { std::cerr << msg << std::endl; });
 }
 
-PluginManager::~PluginManager() {
-
-}
+PluginManager::~PluginManager() {}
 
 void PluginManager::loadPlugins(const std::unordered_map<std::string, bool> & enabledPlugins) {
     namespace fs = std::filesystem;
 
     L.stack_clear();
+    if (this->registerCustomCommand != nullptr) {
+        L.set_function("RegisterCommand", this->registerCustomCommand);
+    }
 
     std::string luaPathExtension = pluginDirectory + "/base/?.lua";
     std::string currentPath      = L["package"]["path"];
@@ -25,7 +29,7 @@ void PluginManager::loadPlugins(const std::unordered_map<std::string, bool> & en
         if (entry.path().extension() == ".lua") {
             std::string path       = entry.path().string();
             std::string pluginName = entry.path().stem().string();
-            std::string globalName = "plugin_" + pluginName;
+            std::string globalName = pluginName;
             plugins[pluginName]    = { globalName, false, path };
 
             if (enabledPlugins.contains(pluginName) && enabledPlugins.at(pluginName) == true) {
@@ -38,6 +42,7 @@ void PluginManager::loadPlugins(const std::unordered_map<std::string, bool> & en
 void PluginManager::enablePlugin(const std::string & name) {
     if (plugins.contains(name)) {
         plugins[name].enabled = true;
+        this->initPlugin(name);
     }
 }
 
@@ -56,43 +61,72 @@ bool PluginManager::isPluginEnabled(const std::string & name) const {
     return it != plugins.end() && it->second.enabled;
 }
 
-std::map<std::string, std::string> PluginManager::call(const std::string &              functionName,
-                                                       const std::vector<std::string> & args) {
-    std::map<std::string, std::string> results;
+bool PluginManager::OnCommand(std::vector<std::string> & args) {
+    if (args.empty()) {
+        return true;
+    }
+
+    const std::string &      command = args[0];
+    std::vector<std::string> commandArgs(args.begin() + 1, args.end());
 
     for (const auto & [name, plugin] : plugins) {
         if (!plugin.enabled) {
             continue;
         }
-        results[name] = "";
 
-        sol::table pluginTable = L[plugin.globalName];
-
-        if (!pluginTable.valid()) {
-            std::cout << "[Lua error] Plugin '" << name << "' must define a global '" << plugin.globalName << "' table."
-                      << std::endl;
-            continue;
-        }
-
-        sol::function luaFunction = pluginTable[functionName];
-
-        if (!luaFunction.valid()) {
-            std::cerr << "[Lua call error] Plugin '" << name << "': '" << functionName
-                      << "' is not a function! It might be a table or undefined." << std::endl;
+        sol::protected_function luaFunc = plugin.table["OnCommand"];
+        if (!luaFunc.valid()) {
             continue;
         }
 
         try {
-            sol::protected_function_result result = luaFunction(sol::as_args(args));
+            sol::protected_function_result result = luaFunc(plugin.table, command, commandArgs);
             if (result.valid()) {
-                if (!result.get<std::string>().empty()) {
-                    results[name] = result.get<std::string>();
+                bool allow = result.get<bool>();
+                if (!allow) {
+                    return false;  // plugin elutasította a futást
                 }
+            } else {
+                return false;  // Lua hiba
             }
-        } catch (const std::exception & e) {
-            std::cerr << "[Lua call error] Plugin '" << name << "': " << e.what() << std::endl;
+        } catch (const sol::error & e) {
+            std::cerr << "[Lua error] Plugin '" << name << "' OnCommand() failed: " << e.what() << std::endl;
+            return true;  // nem tiltom a parancsot, de logolom
         }
     }
 
-    return results;
+    return true;
+}
+
+bool PluginManager::OnPromptFormat(std::string & prompt) {
+    bool modified = false;
+
+    for (const auto & [name, plugin] : plugins) {
+        if (!plugin.enabled) {
+            continue;
+        }
+
+        sol::protected_function luaFunc = plugin.table["OnPromptFormat"];
+        if (!luaFunc.valid()) {
+            continue;
+        }
+
+        try {
+            sol::protected_function_result result = luaFunc(plugin.table, prompt);
+            if (result.valid()) {
+                std::string updatedPrompt = result.get<std::string>();
+                if (updatedPrompt != prompt) {
+                    prompt   = updatedPrompt;
+                    modified = true;
+                }
+            } else {
+                return false;  // Lua hiba
+            }
+        } catch (const sol::error & e) {
+            std::cerr << "[Lua error] Plugin '" << name << "' OnPromptFormat() failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    return modified;
 }

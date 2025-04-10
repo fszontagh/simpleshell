@@ -115,8 +115,9 @@ set("PLUGINS_DIR" "${CMAKE_INSTALL_FULL_DATAROOTDIR}/simpleshell/plugins")
 message(STATUS "Plugins directory: ${PLUGINS_DIR}")
 
 
-configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/Plugin.lua.in ${CMAKE_BINARY_DIR}/plugins/base/Plugin.lua @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
+configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/BasePlugin.lua.in ${CMAKE_BINARY_DIR}/plugins/base/BasePlugin.lua @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
 configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/Example.lua ${CMAKE_BINARY_DIR}/plugins/Example.lua COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/ollama.lua ${CMAKE_BINARY_DIR}/plugins/ollama.lua COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 configure_file(${CMAKE_SOURCE_DIR}/config/options.h.in ${CMAKE_BINARY_DIR}/include/options.hpp @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
 
 install(TARGETS ${BINARY_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})

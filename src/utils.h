@@ -1,6 +1,12 @@
 #ifndef SIMPLESHELL_UTILS_H
 #define SIMPLESHELL_UTILS_H
+#include <unistd.h>
+
+#include <filesystem>
 #include <string>
+#include <vector>
+
+class SimpleShell;
 
 namespace utils {
 class ConfigUtils {
@@ -147,6 +153,23 @@ class ConfigUtils {
         }
         return string.substr(start, end - start + 1);
     };
+
+    static std::pair<std::string, std::string> SplitAtFirstNewline(const std::string & input) {
+        size_t pos = input.find('\n');
+        if (pos == std::string::npos) {
+            return { input, "" };
+        }
+
+        std::string first = input.substr(0, pos);
+        std::string rest  = input.substr(pos + 1);
+
+        // Eltávolítjuk az előző \r-t, ha Windows-style sortörés volt (\r\n)
+        if (!first.empty() && first.back() == '\r') {
+            first.pop_back();
+        }
+
+        return { first, rest };
+    }
 };
 
 };  // namespace utils
