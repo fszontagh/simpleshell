@@ -10,7 +10,7 @@ SimpleShell::SimpleShell() : prompt_("$ ") {
     const char * homeDir  = getenv("HOME");
 
     if (homeDir == nullptr) {
-        std::cerr << "HOME directory not found." << '\n';
+        std::cerr << "HOME directory not found." << utils::ENDLINE;
         return;
     }
 
@@ -62,7 +62,7 @@ void SimpleShell::parse_variables() {
             this->env_set(key, value, SimpleShell::variable_type::SL_VAR_GLOBAL);
         } catch (const std::exception & e) {
             std::cerr << "Failed to add environment variable: " << e.what() << " " << __FILE__ << ":" << __LINE__
-                      << '\n';
+                      << utils::ENDLINE;
         }
     }
     for (const auto & entry : local_vars) {
@@ -74,7 +74,7 @@ void SimpleShell::parse_variables() {
         try {
             this->env_set(key, value, SimpleShell::variable_type::SL_VAR_LOCAL);
         } catch (const std::exception & e) {
-            std::cerr << "Failed to add local variable: " << e.what() << '\n';
+            std::cerr << "Failed to add local variable: " << e.what() << utils::ENDLINE;
         }
     }
 
@@ -125,6 +125,7 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
         if (command.empty()) {
             char * input = readline(prompt_.c_str());
             if (input == nullptr) {
+                std::cout << utils::ENDLINE;
                 break;
             }
             command = std::string(input);
@@ -132,7 +133,7 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
         }
 
         if (command == "exit") {
-            std::cout << "Exiting..." << '\n';
+            std::cout << "Exiting..." << utils::ENDLINE;
             break;
         }
 
@@ -211,7 +212,7 @@ void SimpleShell::execute_command(const std::string & command) {
     if (!args.empty() && args.back() == "&") {
         run_in_background = true;
         args.pop_back();
-        std::cout << "Running in background: " << command << '\n';
+        std::cout << "Running in background: " << command << utils::ENDLINE;
     }
 
     ProcessManager::start_process(args, run_in_background);

@@ -57,10 +57,10 @@ class SimpleShell {
                 SimpleShell::handle_sigchld(sig);
                 return;
             }
-            std::cerr << "Unknown signal received: " << sig << '\n';
+            std::cerr << "Unknown signal received: " << sig << utils::ENDLINE;
             return;
         }
-        std::cerr << "Instance not initialized." << '\n';
+        std::cerr << "Instance not initialized." << utils::ENDLINE;
     }
 
   private:
@@ -491,7 +491,7 @@ class SimpleShell {
             if (var_name.find("COLOR_") == 0 || var_name.find("FONT_") == 0 || var_name.find("BG_") == 0) {
                 auto it = color_codes.find(var_name);
                 if (it != color_codes.end()) {
-                    value = it->second;
+                    value = "\001" + it->second + "\002";
                 } else {
                     value = "";
                 }
@@ -561,7 +561,7 @@ class SimpleShell {
                 this->env_set(key, value, SimpleShell::variable_type::SL_VAR_ENVIRONMENT);
             } catch (const std::exception & e) {
                 std::cerr << "Failed to add environment variable: " << e.what() << " ( " << key << ": " << value
-                          << " ) " << __FILE__ << ":" << __LINE__ << '\n';
+                          << " ) " << __FILE__ << ":" << __LINE__ << utils::ENDLINE;
             }
         }
     }
@@ -569,7 +569,7 @@ class SimpleShell {
     void readConfig() {
         std::string configFilePath = std::string(this->home_directory_) + "/.pshell";
         if (ini_parse(configFilePath.c_str(), config_handler, this) < 0) {
-            std::cerr << "Failed to read configuration file: " << configFilePath << '\n';
+            std::cerr << "Failed to read configuration file: " << configFilePath << utils::ENDLINE;
         }
     }
 
@@ -577,7 +577,7 @@ class SimpleShell {
         std::string   configFilePath = std::string(this->home_directory_) + "/.pshell";
         std::ofstream configFile(configFilePath);
         if (!configFile.is_open()) {
-            std::cerr << "Failed to open configuration file for writing: " << configFilePath << '\n';
+            std::cerr << "Failed to open configuration file for writing: " << configFilePath << utils::ENDLINE;
             return;
         }
 
@@ -634,17 +634,17 @@ class SimpleShell {
         instance->loadEnvironmentVariables();
         instance->parse_variables();
         instance->format_prompt();
-        std::cout << "Configuration reloaded." << '\n';
+        std::cout << "Configuration reloaded." << utils::ENDLINE;
     }
 
     static void cd(const std::vector<std::string> & args) {
         if (args.empty()) {
-            std::cerr << "cd: missing argument" << '\n';
+            std::cerr << "cd: missing argument" << utils::ENDLINE;
             return;
         }
         std::string path = args[1];
         if (path.empty()) {
-            std::cerr << "cd: missing argument" << '\n';
+            std::cerr << "cd: missing argument" << utils::ENDLINE;
             return;
         }
 
@@ -660,39 +660,39 @@ class SimpleShell {
         for (size_t i = 1; i < args.size(); ++i) {
             std::cout << args[i] << (i == args.size() - 1 ? "" : " ");
         }
-        std::cout << '\n';
+        std::cout << utils::ENDLINE;
     }
 
     static void alias(const std::vector<std::string> & args) {
         if (args.size() < 2 || args[1] == "list") {
             for (const auto & cfg : instance->config_get_section_variables("aliases")) {
-                std::cout << cfg.key << " = " << cfg.value << '\n';
+                std::cout << cfg.key << " = " << cfg.value << utils::ENDLINE;
             }
             return;
         }
         if (args.size() > 2 && args[1] == "add") {
             instance->config_set_section_variable("aliases", args[2], args[3], true);
-            std::cout << "alias " << args[2] << " added" << '\n';
+            std::cout << "alias " << args[2] << " added" << utils::ENDLINE;
             return;
         }
         if (args.size() > 2 && args[1] == "delete") {
             if (instance->config_delete_section_variable("aliases", args[2])) {
-                std::cout << "alias " << args[2] << " deleted" << '\n';
+                std::cout << "alias " << args[2] << " deleted" << utils::ENDLINE;
             } else {
-                std::cerr << "alias " << args[2] << " not found" << '\n';
+                std::cerr << "alias " << args[2] << " not found" << utils::ENDLINE;
             }
         }
     }
 
     static void unalias(const std::vector<std::string> & args) {
         if (args.size() < 2) {
-            std::cerr << "unalias: missing argument" << '\n';
+            std::cerr << "unalias: missing argument" << utils::ENDLINE;
             return;
         }
         if (instance->config_delete_section_variable("aliases", args[1])) {
-            std::cout << "alias " << args[1] << " deleted" << '\n';
+            std::cout << "alias " << args[1] << " deleted" << utils::ENDLINE;
         } else {
-            std::cerr << "alias " << args[1] << " not found" << '\n';
+            std::cerr << "alias " << args[1] << " not found" << utils::ENDLINE;
         }
     }
 
@@ -734,11 +734,11 @@ class SimpleShell {
             for (const auto & plugin : instance->plugin_manager->getPlugins()) {
                 std::cout << "ID: " << plugin.first << "\t\t";
                 std::cout << "Name: " << plugin.second.displayName << '\t';
-                std::cout << "Status: " << (plugin.second.enabled ? "active" : "disabled") << '\n';
+                std::cout << "Status: " << (plugin.second.enabled ? "active" : "disabled") << utils::ENDLINE;
                 if (plugin.second.description.empty()) {
                     std::cout << "No description available.\n";
                 } else {
-                    std::cout << plugin.second.description << '\n';
+                    std::cout << plugin.second.description << utils::ENDLINE;
                 }
                 std::cout << "-------------------------------------\n";
             }
@@ -783,11 +783,11 @@ class SimpleShell {
                           << "\n";
             }
         }
-        std::cout << '\n';
+        std::cout << utils::ENDLINE;
     }
 
     [[nodiscard]] static std::string glob_files(const std::string & pattern, const std::string & base_path = "") {
-        std::cout << "Globbing: " << pattern << " Base path: " << base_path << '\n';
+        std::cout << "Globbing: " << pattern << " Base path: " << base_path << utils::ENDLINE;
         // glob struct resides on the stack
         glob_t glob_result;
         memset(&glob_result, 0, sizeof(glob_result));
@@ -815,7 +815,7 @@ class SimpleShell {
         filenames = filenames.substr(0, filenames.size() - 1);
         // cleanup
         globfree(&glob_result);
-        std::cout << "Filenames: " << filenames << '\n';
+        std::cout << "Filenames: " << filenames << utils::ENDLINE;
         // done
         return filenames;
     }

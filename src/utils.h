@@ -9,6 +9,9 @@
 class SimpleShell;
 
 namespace utils {
+
+    static const char ENDLINE = '\n';
+
 class ConfigUtils {
   public:
     static std::string escape(const std::string & input) {
@@ -30,7 +33,7 @@ class ConfigUtils {
                     case '\\':
                         result += "\\\\";  //
                         break;
-                    case '\n':
+                    case utils::ENDLINE:
                         result += "\\n";  //
                         break;
                     case '\r':
@@ -95,7 +98,7 @@ class ConfigUtils {
                             result += '\\';  //
                             break;
                         case 'n':
-                            result += '\n';  //
+                            result += utils::ENDLINE;  //
                             break;
                         case 'r':
                             result += '\r';  //
@@ -155,7 +158,7 @@ class ConfigUtils {
     };
 
     static std::pair<std::string, std::string> SplitAtFirstNewline(const std::string & input) {
-        size_t pos = input.find('\n');
+        size_t pos = input.find(utils::ENDLINE);
         if (pos == std::string::npos) {
             return { input, "" };
         }
