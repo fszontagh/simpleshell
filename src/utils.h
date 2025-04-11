@@ -10,7 +10,7 @@ class SimpleShell;
 
 namespace utils {
 
-    static const char ENDLINE = '\n';
+static const char ENDLINE = '\n';
 
 class ConfigUtils {
   public:
@@ -174,6 +174,35 @@ class ConfigUtils {
         return { first, rest };
     }
 };
+
+static void parse_arguments(const std::string & command, std::vector<std::string> & args) {
+    args.clear();
+    std::string current_arg;
+    bool        in_quotes  = false;
+    char        quote_char = 0;
+
+    for (size_t i = 0; i < command.length(); ++i) {
+        char c = command[i];
+
+        if ((c == '"' || c == '\'') && !in_quotes) {
+            in_quotes  = true;
+            quote_char = c;
+        } else if (c == quote_char && in_quotes) {
+            in_quotes = false;
+        } else if (std::isspace(c) && !in_quotes) {
+            if (!current_arg.empty()) {
+                args.push_back(current_arg);
+                current_arg.clear();
+            }
+        } else {
+            current_arg += c;
+        }
+    }
+
+    if (!current_arg.empty()) {
+        args.push_back(current_arg);
+    }
+}
 
 };  // namespace utils
 #endif

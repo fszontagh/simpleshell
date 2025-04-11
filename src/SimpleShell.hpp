@@ -57,6 +57,10 @@ class SimpleShell {
                 SimpleShell::handle_sigchld(sig);
                 return;
             }
+            if (sig == SIGWINCH) {
+                SimpleShell::handle_sigwinch(sig);
+                return;
+            }
             std::cerr << "Unknown signal received: " << sig << utils::ENDLINE;
             return;
         }
@@ -64,7 +68,8 @@ class SimpleShell {
     }
 
   private:
-    std::shared_ptr<PluginManager> plugin_manager = nullptr;
+    std::shared_ptr<PluginManager> plugin_manager    = nullptr;
+    std::atomic<bool>              sigwinch_received = false;
 
     enum variable_type : std::uint8_t {
         // internal variable
@@ -598,7 +603,10 @@ class SimpleShell {
 
     static void handle_sigchld(const int & /*signal*/) { ProcessManager::handle_completed_processes(); }
 
+    static void handle_sigwinch(const int & /*signal*/) { SimpleShell::instance->sigwinch_received = true; };
+
     static void handle_sigint(const int & signal) {
+
         ProcessManager::instance().send_signal_to_foregound(signal);
         SimpleShell::instance->parse_variables();
         SimpleShell::instance->format_prompt();

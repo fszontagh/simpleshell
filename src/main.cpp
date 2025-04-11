@@ -22,6 +22,7 @@ int main(int argc, char * argv[]) {
     signal(SIGINT, SimpleShell::signal_handler_wrapper);
     signal(SIGTSTP, SimpleShell::signal_handler_wrapper);
     signal(SIGCHLD, SimpleShell::signal_handler_wrapper);
+    signal(SIGWINCH, SimpleShell::signal_handler_wrapper);
 
     std::vector<std::string> params = {};
     std::string              runnable;

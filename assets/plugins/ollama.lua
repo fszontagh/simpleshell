@@ -108,14 +108,11 @@ function ollama:OnCommand(command, args)
             stream = streaming_enabled
         }
 
-        print("Prompt: " .. prompt .. " command: " .. command)
-
         if streaming_enabled then
             self:streamRequest(endpoint, data)
         else
             local jdata = json.encode(data)
             local response_body = {}
-            print("Sending request to " .. ollama.ollama_url .. endpoint)
             local res, code = http.request {
                 url = ollama.ollama_url .. endpoint,
                 method = "POST",
@@ -126,14 +123,11 @@ function ollama:OnCommand(command, args)
                     ["Content-Length"] = tostring(#jdata)
                 }
             }
-            print("Response code: " .. tostring(code))
-
             if code ~= 200 then
                 print("Error (" .. tostring(code) .. "): " .. tostring(res))
             else
 
                 local response = json.decode(table.concat(response_body, ""))
-                print("Response: " .. response.message.content)
                 local lines = split_lines(response.message.content)
                 for _, line in ipairs(lines) do
                     print("> " .. line)

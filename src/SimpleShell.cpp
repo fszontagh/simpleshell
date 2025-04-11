@@ -15,7 +15,8 @@ SimpleShell::SimpleShell() : prompt_("$ ") {
     }
 
     this->home_directory_ = std::string(homeDir);
-    this->plugin_manager  = std::make_shared<PluginManager>(PLUGINS_DIR);
+
+    this->plugin_manager = std::make_shared<PluginManager>(PLUGINS_DIR);
 
     this->readConfig();
     this->loadEnvironmentVariables();
@@ -121,6 +122,10 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
     while (true) {
         this->parse_variables();
         this->format_prompt();
+        if (instance->sigwinch_received) {
+            rl_resize_terminal();
+            instance->sigwinch_received = false;
+        }
 
         if (command.empty()) {
             char * input = readline(prompt_.c_str());
@@ -160,13 +165,8 @@ SimpleShell::~SimpleShell() {
 }
 
 void SimpleShell::execute_command(const std::string & command) {
-    std::stringstream        ss(command);
-    std::string              segment;
-    std::vector<std::string> args;
-    while (ss >> segment) {
-        args.push_back(segment);
-    }
-
+    std::vector<std::string> args = {};
+    utils::parse_arguments(command, args);
     if (args.empty()) {
         return;
     }
