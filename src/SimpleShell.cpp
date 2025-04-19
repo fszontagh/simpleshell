@@ -291,12 +291,22 @@ void SimpleShell::handle_single_command(std::vector<std::string> cmd, const std:
         perror("execvp");
         exit(EXIT_FAILURE);
     } else {
-        // Parent
+        // Parent: register process in manager
+        {
+            using PM = ProcessManager;
+            auto type = background ? PM::ProcessType::PM_PROC_TYPE_BACKGROUND
+                                    : PM::ProcessType::PM_PROC_TYPE_FOREGROUND;
+            PM::Process proc{PM::Process::argsToCommand(cmd), cmd, pid, type};
+            proc.state = PM::ProcessState::PM_PROC_STATE_RUNNING;
+            auto proc_ptr = std::make_shared<PM::Process>(std::move(proc));
+            ProcessManager::instance().process_add(proc_ptr);
+        }
+        // Handle background vs foreground
         if (background) {
             std::cout << "Process " << pid << " running in background." << utils::ENDLINE;
         } else {
-            int status = 0;
-            waitpid(pid, &status, 0);
+            // Bring to foreground and wait
+            ProcessManager::process_handle_foreground(pid, getpgrp());
         }
     }
 }
@@ -367,10 +377,19 @@ void SimpleShell::execute_pipeline(const std::vector<std::vector<std::string>> &
             perror("execvp");
             exit(EXIT_FAILURE);
         } else {
-            // Parent: set process group
+            // Parent: set process group and register process
             pids[i] = pid;
             if (i == 0) pgid = pid;
             setpgid(pid, pgid);
+            {
+                using PM = ProcessManager;
+                auto type = background ? PM::ProcessType::PM_PROC_TYPE_BACKGROUND
+                                       : PM::ProcessType::PM_PROC_TYPE_FOREGROUND;
+                PM::Process proc{PM::Process::argsToCommand(cmds[i]), cmds[i], pid, type};
+                proc.state = PM::ProcessState::PM_PROC_STATE_RUNNING;
+                auto proc_ptr = std::make_shared<PM::Process>(std::move(proc));
+                ProcessManager::instance().process_add(proc_ptr);
+            }
         }
     }
     // Parent: close all pipe fds

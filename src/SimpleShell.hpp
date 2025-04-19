@@ -717,8 +717,16 @@ class SimpleShell {
         rl_redisplay();
     }
 
-    static void handle_sigtstp(const int & signal) {
-        ProcessManager::instance().send_signal_to_foregound(signal);
+    static void handle_sigtstp(const int & /*signal*/) {
+        // Suspend all foreground processes and move them to background
+        auto procs = ProcessManager::instance().get_running_processes();
+        for (const auto & proc : procs) {
+            if (proc.type == ProcessManager::ProcessType::PM_PROC_TYPE_FOREGROUND) {
+                ProcessManager::send_signal_to_process(proc.pid, SIGSTOP);
+                ProcessManager::instance().process_set_type(proc.pid, ProcessManager::ProcessType::PM_PROC_TYPE_BACKGROUND);
+            }
+        }
+        // Refresh prompt
         SimpleShell::instance->parse_variables();
         SimpleShell::instance->format_prompt();
         rl_replace_line("", 0);
@@ -770,10 +778,64 @@ class SimpleShell {
     }
 
     static void echo(const std::vector<std::string> & args) {
-        for (size_t i = 1; i < args.size(); ++i) {
-            std::cout << args[i] << (i == args.size() - 1 ? "" : " ");
+        bool no_newline = false;
+        bool interpret_escapes = false;
+        size_t i = 1;
+        // Parse options -n and -e (can be combined, e.g., -ne)
+        for (; i < args.size() && args[i].size() > 1 && args[i][0] == '-'; ++i) {
+            bool recognized = true;
+            for (size_t j = 1; j < args[i].size(); ++j) {
+                char c = args[i][j];
+                if (c == 'n') {
+                    no_newline = true;
+                } else if (c == 'e') {
+                    interpret_escapes = true;
+                } else {
+                    recognized = false;
+                    break;
+                }
+            }
+            if (!recognized) {
+                // Stop option parsing on unknown flag
+                break;
+            }
         }
-        std::cout << utils::ENDLINE;
+        // Helper to process escape sequences
+        auto process_arg = [&](const std::string & s) {
+            if (!interpret_escapes) {
+                return s;
+            }
+            std::string out;
+            for (size_t k = 0; k < s.size(); ++k) {
+                if (s[k] == '\\' && k + 1 < s.size()) {
+                    char esc = s[k + 1];
+                    switch (esc) {
+                        case 'a': out += '\a'; break;
+                        case 'b': out += '\b'; break;
+                        case 'e': case 'E': out += '\x1b'; break;
+                        case 'f': out += '\f'; break;
+                        case 'n': out += '\n'; break;
+                        case 'r': out += '\r'; break;
+                        case 't': out += '\t'; break;
+                        case 'v': out += '\v'; break;
+                        case '\\': out += '\\'; break;
+                        default: out += esc; break;
+                    }
+                    ++k;
+                } else {
+                    out += s[k];
+                }
+            }
+            return out;
+        };
+        // Print remaining arguments
+        for (; i < args.size(); ++i) {
+            std::string s = process_arg(args[i]);
+            std::cout << s << (i + 1 < args.size() ? " " : "");
+        }
+        if (!no_newline) {
+            std::cout << utils::ENDLINE;
+        }
     }
     // Built-in command: print environment variables (original and shell-set globals)
     static void env(const std::vector<std::string> & /*args*/) {
@@ -821,29 +883,51 @@ class SimpleShell {
     }
 
     static void bg(const std::vector<std::string> & args) {
-        pid_t pid = ProcessManager::instance().process_get_latest_stopped_pid();
-        if (args.size() == 2) {
-            {
-                pid = std::stoi(args[1]);
-            }
-        }
-        if (pid < 0) {
-            std::cout << "No stopped jobs.\n";
+        auto stopped = ProcessManager::instance().get_stopped_processes();
+        if (stopped.empty()) {
+            std::cout << "No stopped jobs." << utils::ENDLINE;
             return;
         }
+        pid_t pid = -1;
+        if (args.size() == 2) {
+            std::string arg = args[1];
+            if (!arg.empty() && arg[0] == '%') {
+                arg = arg.substr(1);
+            }
+            int id = std::stoi(arg);
+            if (id >= 1 && id <= static_cast<int>(stopped.size())) {
+                pid = stopped[id - 1].pid;
+            } else {
+                pid = id;
+            }
+        } else {
+            pid = stopped.back().pid;
+        }
         ProcessManager::send_signal_to_process(pid, SIGCONT);
+        // Mark job as background
+        ProcessManager::instance().process_set_type(pid, ProcessManager::ProcessType::PM_PROC_TYPE_BACKGROUND);
     }
 
     static void fg(const std::vector<std::string> & args) {
-        pid_t pid = ProcessManager::instance().process_get_latest_stopped_pid();
-        if (args.size() == 2) {
-            {
-                pid = std::stoi(args[1]);
-            }
-        }
-        if (pid < 0) {
-            std::cout << "No stopped jobs.\n";
+        auto stopped = ProcessManager::instance().get_stopped_processes();
+        if (stopped.empty()) {
+            std::cout << "No stopped jobs." << utils::ENDLINE;
             return;
+        }
+        pid_t pid = -1;
+        if (args.size() == 2) {
+            std::string arg = args[1];
+            if (!arg.empty() && arg[0] == '%') {
+                arg = arg.substr(1);
+            }
+            int id = std::stoi(arg);
+            if (id >= 1 && id <= static_cast<int>(stopped.size())) {
+                pid = stopped[id - 1].pid;
+            } else {
+                pid = id;
+            }
+        } else {
+            pid = stopped.back().pid;
         }
         ProcessManager::process_handle_foreground(pid, getpgrp());
     }
@@ -884,28 +968,30 @@ class SimpleShell {
         }
     }
 
-    static void jobs(const std::vector<std::string> & args) {
-        const auto n_stopped = ProcessManager::instance().get_stopped_processes_count();
-        const auto n_running = ProcessManager::instance().get_running_processes_count();
-
-        std::cout << "Running processes: " << n_running << "\n";
-
-        if (n_running > 0) {
-            for (const auto & process : ProcessManager::instance().get_running_processes()) {
-                const std::string status = ProcessManager::statusToString(process.state);
-                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
-                          << "\n";
+    static void jobs(const std::vector<std::string> & /*args*/) {
+        // List background running jobs
+        auto all_running = ProcessManager::instance().get_running_processes();
+        std::vector<ProcessManager::Process> bg_jobs;
+        for (const auto & proc : all_running) {
+            if (proc.type == ProcessManager::ProcessType::PM_PROC_TYPE_BACKGROUND) {
+                bg_jobs.push_back(proc);
             }
         }
-
-        std::cout << "Stopped jobs: " << n_stopped << "\n";
-
-        if (n_stopped > 0) {
-            for (const auto & process : ProcessManager::instance().get_stopped_processes()) {
-                const std::string status = ProcessManager::statusToString(process.state);
-                std::cout << "PID: " << process.pid << " status: " << status << ", Command: " << process.command
-                          << "\n";
-            }
+        std::cout << "Background jobs: " << bg_jobs.size() << "\n";
+        for (size_t i = 0; i < bg_jobs.size(); ++i) {
+            const auto & proc = bg_jobs[i];
+            std::cout << "[" << (i + 1) << "] PID: " << proc.pid
+                      << " status: " << ProcessManager::statusToString(proc.state)
+                      << ", Command: " << proc.command << utils::ENDLINE;
+        }
+        // List stopped jobs
+        auto stopped = ProcessManager::instance().get_stopped_processes();
+        std::cout << "Stopped jobs: " << stopped.size() << "\n";
+        for (size_t i = 0; i < stopped.size(); ++i) {
+            const auto & proc = stopped[i];
+            std::cout << "[" << (i + 1) << "] PID: " << proc.pid
+                      << " status: " << ProcessManager::statusToString(proc.state)
+                      << ", Command: " << proc.command << utils::ENDLINE;
         }
         std::cout << utils::ENDLINE;
     }
