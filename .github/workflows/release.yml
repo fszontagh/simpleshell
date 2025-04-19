@@ -2,14 +2,15 @@ name: Build and Release
 
 on:
   workflow_dispatch:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
   build:
     name: Build and Package
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 
     steps:
       - name: Checkout code
@@ -22,9 +23,7 @@ jobs:
             cmake \
             build-essential \
             pkg-config \
-            libreadline-dev \
-            lua5.3 \
-            liblua5.3-dev
+            libreadline-dev
 
       - name: Configure CMake
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -53,7 +52,7 @@ jobs:
             build/*.sha256
 
       - name: Upload release assets
-        if: github.event_name == 'release'
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

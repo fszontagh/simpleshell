@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
 project(simpleshell
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "A simple shell"
     HOMEPAGE_URL "https://github.com/fszontagh/simpleshell"
 )
@@ -56,13 +56,17 @@ set(
 set(CPACK_PACKAGING_INSTALL_PREFIX "/")
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    execute_process(
+    if(EXISTS /etc/lsb-release)
+      execute_process(
         COMMAND bash -c "source /etc/lsb-release && echo \"$DISTRIB_ID$DISTRIB_RELEASE\""
         OUTPUT_VARIABLE LSB_CODENAME
         OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    set(CPACK_SYSTEM_NAME ${LSB_CODENAME})
-    message(STATUS "Detected LSB_CODENAME: ${LSB_CODENAME}")
+      )
+      set(CPACK_SYSTEM_NAME ${LSB_CODENAME})
+      message(STATUS "Detected LSB_CODENAME: ${LSB_CODENAME}")
+    else()
+      message(STATUS "/etc/lsb-release not found, leaving CPACK_SYSTEM_NAME unset")
+    endif()
 endif()
 
 include(FetchContent)
@@ -85,19 +89,6 @@ add_library(inih STATIC
 )
 target_include_directories(inih PUBLIC ${inih_SOURCE_DIR})
 
-### SOL
-include(FetchContent)
-
-FetchContent_Declare(
-    sol2
-    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
-    GIT_TAG        v3.3.0
-)
-
-if(NOT sol2_POPULATED)
-    FetchContent_Populate(sol2)
-endif()
-set(sol2_EXCLUDE_FROM_ALL TRUE)
 
 
 
@@ -107,17 +98,19 @@ pkg_check_modules(readline readline REQUIRED)
 # Threads for shared memory mutex
 find_package(Threads REQUIRED)
 
-find_package(Lua REQUIRED)
 
-add_executable(${BINARY_NAME} src/main.cpp src/SimpleShell.cpp src/PluginManager.cpp ${inih_SOURCE_DIR}/ini.c)
+add_executable(${BINARY_NAME} src/main.cpp src/SimpleShell.cpp ${inih_SOURCE_DIR}/ini.c)
 
 target_link_libraries(${BINARY_NAME}
+    PRIVATE
     inih
     readline
-    ${LUA_LIBRARIES}
     Threads::Threads
 )
-target_include_directories(${BINARY_NAME} PRIVATE ${inih_SOURCE_DIR} ${LUA_INCLUDE_DIR} ${CMAKE_BINARY_DIR}/include ${sol2_SOURCE_DIR}/include)
+target_include_directories(${BINARY_NAME} PRIVATE
+  ${inih_SOURCE_DIR}
+  ${CMAKE_BINARY_DIR}/include
+)
 
 
 
@@ -132,14 +125,10 @@ set("PLUGINS_DIR" "${CMAKE_INSTALL_FULL_DATAROOTDIR}/simpleshell/plugins")
 message(STATUS "Plugins directory: ${PLUGINS_DIR}")
 
 
-configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/BasePlugin.lua.in ${CMAKE_BINARY_DIR}/plugins/base/BasePlugin.lua @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
-configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/Example.lua ${CMAKE_BINARY_DIR}/plugins/Example.lua COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
-configure_file(${CMAKE_SOURCE_DIR}/assets/plugins/ollama.lua ${CMAKE_BINARY_DIR}/plugins/ollama.lua COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
 configure_file(${CMAKE_SOURCE_DIR}/config/options.h.in ${CMAKE_BINARY_DIR}/include/options.hpp @ONLY FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
 
 install(TARGETS ${BINARY_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/config/.pshell DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/skel)
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/simpleshell)
-install(DIRECTORY ${CMAKE_BINARY_DIR}/plugins DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/simpleshell)
 
 include(CPack)
