@@ -81,17 +81,13 @@ class ProcessManager {
     ProcessManager() = default;
 
     ~ProcessManager() {
+        // Ensure running processes are terminated
         for (auto & process : processes_) {
             if (process->state == ProcessState::PM_PROC_STATE_RUNNING) {
                 kill(process->pid, SIGKILL);
             }
         }
         processes_.clear();
-        for (auto & thread : threads_) {
-            if (thread.joinable()) {
-                thread.join();
-            }
-        }
     }
 
     ProcessManager(const ProcessManager &)             = delete;
@@ -435,6 +431,5 @@ class ProcessManager {
   private:
     std::vector<std::shared_ptr<Process>> processes_;
     mutable std::mutex                    processes_mutex_;
-    std::vector<std::thread>              threads_;
 };
 #endif

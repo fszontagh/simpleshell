@@ -45,7 +45,8 @@ int main(int argc, char * argv[]) {
                       << utils::ENDLINE;
             return 0;
         }
-        runnable = arg[1];
+        // Use full argument string as runnable target, not only the second character
+        runnable = arg;
         for (int i = 2; i < argc; ++i) {
             params.push_back(argv[i]);
         }

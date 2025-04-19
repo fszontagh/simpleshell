@@ -225,12 +225,12 @@ class SimpleShell {
                                  {},
                                  "Print out the environment variables",
                                  SL_CUSTOM_COMMAND_TYPE_BUILTIN,
-                                 SimpleShell::echo }                                                    },
+                                 SimpleShell::env }                                                    },
         { "jobs",          custom_command{ "jobs", {}, "Show jobs", SL_CUSTOM_COMMAND_TYPE_BUILTIN, SimpleShell::jobs } },
         { "plugins",       custom_command{ "plugins",
                                      { custom_command_params{ "list", "List available plugins" },
+                                       custom_command_params{ "enable <plugin id>", "Enable plugin with id" },
                                        custom_command_params{ "disable <plugin id>", "Disable plugin with id" },
-                                       custom_command_params{ "list", "List available plugins" },
                                        custom_command_params{ "reload", "Reload plugins" } },
                                      "Manage the plugins",
                                      SL_CUSTOM_COMMAND_TYPE_BUILTIN,
@@ -240,7 +240,7 @@ class SimpleShell {
                           { custom_command_params{ "add <alias_name> <command>", "Add a new alias" },
                             custom_command_params{ "delete <alias_name>", "Delete alias with name <alias_name>" },
                             custom_command_params{ "list", "List all configured alias" } },
-                          "Show jobs",
+                          "Manage aliases",
                           SL_CUSTOM_COMMAND_TYPE_BUILTIN,
                           SimpleShell::alias }                                                                          },
 
@@ -369,10 +369,15 @@ class SimpleShell {
     }
 
     static char ** rl_completion(const char * text, int start, int end) {
-        // Don't do filename completion even if our generator finds no matches.
-        //rl_attempted_completion_over = 1;
-
-        return rl_completion_matches(text, SimpleShell::completion_generator);
+        // Use custom completion for command names; fallback to filename completion for arguments
+        rl_attempted_completion_over = 1;
+        if (start == 0) {
+            // complete the first word: commands and built-ins
+            return rl_completion_matches(text, SimpleShell::completion_generator);
+        } else {
+            // complete file names for subsequent words
+            return rl_completion_matches(text, rl_filename_completion_function);
+        }
     }
 
     void LoadSystemBinaries();
@@ -670,6 +675,17 @@ class SimpleShell {
         }
         std::cout << utils::ENDLINE;
     }
+    // Built-in command: print environment variables (original and shell-set globals)
+    static void env(const std::vector<std::string> & /*args*/) {
+        // Print original environment variables
+        for (const auto & var : instance->get_env_variables(SimpleShell::variable_type::SL_VAR_ENVIRONMENT)) {
+            std::cout << var.key << "=" << var.value << utils::ENDLINE;
+        }
+        // Print global shell variables exported as environment
+        for (const auto & var : instance->get_env_variables(SimpleShell::variable_type::SL_VAR_GLOBAL)) {
+            std::cout << var.key << "=" << var.value << utils::ENDLINE;
+        }
+    }
 
     static void alias(const std::vector<std::string> & args) {
         if (args.size() < 2 || args[1] == "list") {
@@ -795,7 +811,6 @@ class SimpleShell {
     }
 
     [[nodiscard]] static std::string glob_files(const std::string & pattern, const std::string & base_path = "") {
-        std::cout << "Globbing: " << pattern << " Base path: " << base_path << utils::ENDLINE;
         // glob struct resides on the stack
         glob_t glob_result;
         memset(&glob_result, 0, sizeof(glob_result));
@@ -823,7 +838,6 @@ class SimpleShell {
         filenames = filenames.substr(0, filenames.size() - 1);
         // cleanup
         globfree(&glob_result);
-        std::cout << "Filenames: " << filenames << utils::ENDLINE;
         // done
         return filenames;
     }
