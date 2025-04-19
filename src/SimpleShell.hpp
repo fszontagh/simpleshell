@@ -124,6 +124,14 @@ class SimpleShell {
 
     typedef std::map<std::string, conf_variable> config_pair;
     typedef std::map<std::string, config_pair>   env_pair;
+    // Redirection types for pipeline and file I/O
+    enum class RedirType { IN, OUT, ERR };
+    enum class RedirMode { TRUNC, APPEND };
+    struct Redirection {
+        RedirType type;
+        RedirMode mode;
+        std::string file;
+    };
 
     inline static const std::unordered_map<std::string, std::string> color_codes = {
         { "COLOR_BLACK",    "\033[30m" },
@@ -516,16 +524,26 @@ class SimpleShell {
                         base_path.insert(0, current_dir + "/");
                     }
                 }
-                std::string pattern_with_wildcard = base_path;
-                pattern_with_wildcard += "/";
-                pattern_with_wildcard += pattern;
-                std::string matched_files = glob_files(pattern_with_wildcard, base_path + "/");
-
-                std::istringstream iss(matched_files);
-                std::string        token;
-                while (iss >> std::quoted(token)) {
-                    result.push_back(token);
+                std::string pattern_with_wildcard = base_path + "/" + pattern;
+                // Perform glob directly, collect matching filenames
+                glob_t glob_result;
+                memset(&glob_result, 0, sizeof(glob_result));
+                int ret = glob(pattern_with_wildcard.c_str(), GLOB_TILDE, NULL, &glob_result);
+                if (ret == 0) {
+                    for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
+                        std::string p = glob_result.gl_pathv[i];
+                        // Strip base_path prefix
+                        std::string prefix = base_path + "/";
+                        if (!base_path.empty() && p.rfind(prefix, 0) == 0) {
+                            p = p.substr(prefix.size());
+                        }
+                        result.push_back(p);
+                    }
+                } else {
+                    // No matches: keep literal pattern
+                    result.push_back(s);
                 }
+                globfree(&glob_result);
             } else {
                 result.push_back(s);
             }
@@ -719,6 +737,10 @@ class SimpleShell {
     std::vector<env_variable> get_env_variables(variable_type type = SL_VAR_ANY);
 
     void execute_command(const std::string & command);
+    // Execute a single command with optional redirections
+    void handle_single_command(std::vector<std::string> cmd, const std::vector<Redirection> & redirs, bool background);
+    // Execute a pipeline of commands with per-segment redirections
+    void execute_pipeline(const std::vector<std::vector<std::string>> & cmds, const std::vector<std::vector<Redirection>> & redirs, bool background);
 
     static void reload_config(const std::vector<std::string> & /*args*/) {
         instance->readConfig();
