@@ -5,6 +5,15 @@ project(simpleshell
     HOMEPAGE_URL "https://github.com/fszontagh/simpleshell"
 )
 
+# Obtain current git commit hash for version information
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+message(STATUS "Git commit hash: ${GIT_COMMIT_HASH}")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

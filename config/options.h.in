@@ -1,6 +1,7 @@
 #cmakedefine DEBUG @DEBUG@
 #cmakedefine CMAKE_PROJECT_VERSION "@CMAKE_PROJECT_VERSION@"
 #cmakedefine LUA_VERSION "@LUA_VERSION@"
+#cmakedefine GIT_COMMIT_HASH "@GIT_COMMIT_HASH@"
 #ifndef DEBUG
 #cmakedefine PLUGINS_DIR "@PLUGINS_DIR@"
 #else

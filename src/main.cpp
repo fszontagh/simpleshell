@@ -37,7 +37,11 @@ int main(int argc, char * argv[]) {
             return 0;
         }
         if (arg == "--version") {
-            std::cout << "Simple shell 1.0\n"
+            std::cout << "Simple shell " << CMAKE_PROJECT_VERSION;
+#ifdef GIT_COMMIT_HASH
+            std::cout << " (" << GIT_COMMIT_HASH << ")";
+#endif
+            std::cout << "\n"
                       << "Copyright (C) 2023 Simple shell contributors\n"
                       << "License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>\n"
                       << "This is free software: you are free to change and redistribute it.\n"
