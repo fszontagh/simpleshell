@@ -939,16 +939,9 @@ class SimpleShell {
         }
         auto * isntance = SimpleShell::instance;
         if (args[1] == "list") {
-            for (const auto & plugin : instance->plugin_manager->getPlugins()) {
-                std::cout << "ID: " << plugin.first << "\t\t";
-                std::cout << "Name: " << plugin.second.displayName << '\t';
-                std::cout << "Status: " << (plugin.second.enabled ? "active" : "disabled") << utils::ENDLINE;
-                if (plugin.second.description.empty()) {
-                    std::cout << "No description available.\n";
-                } else {
-                    std::cout << plugin.second.description << utils::ENDLINE;
-                }
-                std::cout << "-------------------------------------\n";
+            for (const auto & [name, enabled] : instance->plugin_manager->getPlugins()) {
+                std::cout << "ID: " << name << "\t\t";
+                std::cout << "Status: " << (enabled ? "active" : "disabled") << utils::ENDLINE;
             }
             return;
         }

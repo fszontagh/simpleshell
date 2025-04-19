@@ -36,12 +36,7 @@ int main(int argc, char * argv[]) {
 #ifdef GIT_COMMIT_HASH
             std::cout << " (" << GIT_COMMIT_HASH << ")";
 #endif
-            std::cout << "\n"
-                      << "Copyright (C) 2023 Simple shell contributors\n"
-                      << "License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>\n"
-                      << "This is free software: you are free to change and redistribute it.\n"
-                      << "There is NO WARRANTY, to the extent permitted by law.\n"
-                      << utils::ENDLINE;
+            std::cout << "\n" << utils::ENDLINE;
             return 0;
         }
         // Treat first non-option as script or command to run

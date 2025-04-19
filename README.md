@@ -103,10 +103,12 @@ $ sleep 60
 ^Z
 
 $ jobs
-Running processes: 1
-PID: 123455 status: running, Command: sleep 30
+Background jobs: 1
+[1] PID: 123455 started: 2025-04-19 11:56:45.123
+status: running, Command: sleep 30
 Stopped jobs: 1
-PID: 123456 status: stopped, Command: sleep 30
+[1] PID: 123456 started: 2025-04-19 11:57:00.456
+status: stopped, Command: sleep 60
 
 $ bg
 Continuing process 123456

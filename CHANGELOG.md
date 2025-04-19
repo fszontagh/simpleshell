@@ -1,3 +1,13 @@
+## 0.1.1 (2025-04-19)
+
+### Changed
+- Refined `jobs` builtin output to include numbered job IDs, human-readable start timestamps, and separate background/stopped sections.
+- Removed license text from `--version` output.
+- Removed LUA and the plugin system
+
+### Fixed
+- Corrected GitHub Actions release workflow to ensure proper artifact uploading.
+
 ## 0.1.0 (2025-04-19)
 
 First release with the following updates since initial prototype:
