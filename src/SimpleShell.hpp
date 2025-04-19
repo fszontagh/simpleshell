@@ -269,6 +269,11 @@ class SimpleShell {
     std::vector<env_variable>                        shell_variables_;
     std::map<std::string, config_pair>               config_map_;
     std::string                                      home_directory_;
+    // Record last modification time of the configuration file
+    // Record last modification time of the configuration file
+    std::filesystem::file_time_type                  config_file_time_{};
+    // Track whether the configuration file existed when last reading/writing
+    bool                                             config_file_exists_{false};
     std::map<pid_t, std::string>                     stopped_jobs_;
     std::map<pid_t, std::string>                     running_processes_;
     std::vector<std::string>                         vocabulary{ "cat", "dog", "canary", "cow", "hamster" };
@@ -368,16 +373,57 @@ class SimpleShell {
         return strdup(matches[match_index++].c_str());
     }
 
+    // Complete filenames but only show executables (used for first-word paths)
+    static char ** rl_executable_filename_completion(const char * text, int start, int end) {
+        // Get all filename matches via readline helper
+        char ** raw = rl_completion_matches(text, rl_filename_completion_function);
+        if (!raw) {
+            return nullptr;
+        }
+        // Extract directory prefix
+        std::string txt(text);
+        std::string prefix;
+        auto pos = txt.find_last_of('/');
+        if (pos != std::string::npos) {
+            prefix = txt.substr(0, pos + 1);
+        }
+        // Filter for executables only
+        std::vector<char *> execs;
+        for (size_t i = 0; raw[i] != nullptr; ++i) {
+            char * name = raw[i];
+            std::string full = prefix + name;
+            if (access(full.c_str(), X_OK) == 0 && std::filesystem::is_regular_file(full)) {
+                execs.push_back(strdup(name));
+            }
+        }
+        // Free raw matches
+        for (size_t i = 0; raw[i] != nullptr; ++i) free(raw[i]);
+        free(raw);
+        if (execs.empty()) {
+            return nullptr;
+        }
+        // Build return array
+        char ** out = (char **)malloc((execs.size() + 1) * sizeof(char *));
+        for (size_t i = 0; i < execs.size(); ++i) {
+            out[i] = execs[i];
+        }
+        out[execs.size()] = nullptr;
+        return out;
+    }
+
     static char ** rl_completion(const char * text, int start, int end) {
-        // Use custom completion for command names; fallback to filename completion for arguments
+        // If completing first word
         rl_attempted_completion_over = 1;
         if (start == 0) {
-            // complete the first word: commands and built-ins
+            // If text contains '/', show only executables
+            if (std::strchr(text, '/') != nullptr) {
+                return rl_executable_filename_completion(text, start, end);
+            }
+            // Otherwise complete commands and built-ins
             return rl_completion_matches(text, SimpleShell::completion_generator);
-        } else {
-            // complete file names for subsequent words
-            return rl_completion_matches(text, rl_filename_completion_function);
         }
+        // For subsequent words, complete all filenames
+        return rl_completion_matches(text, rl_filename_completion_function);
     }
 
     void LoadSystemBinaries();
@@ -578,13 +624,38 @@ class SimpleShell {
 
     void readConfig() {
         std::string configFilePath = std::string(this->home_directory_) + "/.pshell";
+        // Check whether the config file exists to detect external modifications
+        bool file_exists = std::filesystem::exists(configFilePath);
         if (ini_parse(configFilePath.c_str(), config_handler, this) < 0) {
             std::cerr << "Failed to read configuration file: " << configFilePath << utils::ENDLINE;
+        }
+        // Record file existence and last modification time
+        if (file_exists) {
+            try {
+                config_file_time_ = std::filesystem::last_write_time(configFilePath);
+            } catch (...) {
+                // Unable to get file time; ignore
+            }
+            config_file_exists_ = true;
+        } else {
+            config_file_exists_ = false;
         }
     }
 
     void writeConfig() {
-        std::string   configFilePath = std::string(this->home_directory_) + "/.pshell";
+        std::string configFilePath = std::string(this->home_directory_) + "/.pshell";
+        // Avoid overwriting external changes
+        if (config_file_exists_) {
+            try {
+                auto current_time = std::filesystem::last_write_time(configFilePath);
+                if (current_time != config_file_time_) {
+                    std::cerr << "Warning: configuration file changed externally; skipping write to avoid overwriting changes" << utils::ENDLINE;
+                    return;
+                }
+            } catch (...) {
+                // Unable to get file time; proceed with caution
+            }
+        }
         std::ofstream configFile(configFilePath);
         if (!configFile.is_open()) {
             std::cerr << "Failed to open configuration file for writing: " << configFilePath << utils::ENDLINE;
@@ -604,6 +675,13 @@ class SimpleShell {
         }
 
         configFile.close();
+        // Update recorded modification time after successful write
+        try {
+            config_file_time_ = std::filesystem::last_write_time(configFilePath);
+        } catch (...) {
+            // Unable to get file time; ignore
+        }
+        config_file_exists_ = true;
     }
 
     static void handle_sigchld(const int & /*signal*/) { ProcessManager::handle_completed_processes(); }
