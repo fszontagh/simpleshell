@@ -104,11 +104,19 @@ set(sol2_EXCLUDE_FROM_ALL TRUE)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(readline readline REQUIRED)
 
+# Threads for shared memory mutex
+find_package(Threads REQUIRED)
+
 find_package(Lua REQUIRED)
 
 add_executable(${BINARY_NAME} src/main.cpp src/SimpleShell.cpp src/PluginManager.cpp ${inih_SOURCE_DIR}/ini.c)
 
-target_link_libraries(${BINARY_NAME} inih readline ${LUA_LIBRARIES})
+target_link_libraries(${BINARY_NAME}
+    inih
+    readline
+    ${LUA_LIBRARIES}
+    Threads::Threads
+)
 target_include_directories(${BINARY_NAME} PRIVATE ${inih_SOURCE_DIR} ${LUA_INCLUDE_DIR} ${CMAKE_BINARY_DIR}/include ${sol2_SOURCE_DIR}/include)
 
 

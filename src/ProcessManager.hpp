@@ -4,7 +4,37 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <pthread.h>  // for shared memory mutex operations
+#include <cstdint>    // for uint8_t, uint32_t
+#include <cstring>    // for strncpy, memset
+#include <cstdio>     // for perror
+#include <ctime>      // for time_t
+#include <chrono>     // for high-resolution time
 
+// Shared job table across shell instances
+static constexpr const char* SHM_NAME = "/simpleshell_jobs";
+static constexpr size_t SHM_MAX_JOBS = 256;
+
+// Entry for each job in shared memory
+struct SharedProcessEntry {
+    bool        in_use;
+    pid_t       pid;
+    uint8_t     state;       // corresponds to ProcessManager::ProcessState
+    uint8_t     type;        // corresponds to ProcessManager::ProcessType
+    int         exit_status;
+    int64_t     start_time_ms;  // milliseconds since epoch when the process was started
+    char        command[256];
+};
+
+// Shared region header
+struct SharedJobs {
+    uint32_t            initialized;
+    pthread_mutex_t     mutex;
+    size_t              count;
+    SharedProcessEntry  entries[SHM_MAX_JOBS];
+};
+
+// C++ STL
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -12,6 +42,12 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <mutex>
+
+// POSIX shared memory
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 class ProcessManager {
   public:
@@ -58,6 +94,7 @@ class ProcessManager {
         ProcessState             state       = ProcessManager::ProcessState::PM_PROC_STATE_RUNNING;
         bool                     deleted     = false;
         int                      exit_status = 0;
+        int64_t                  start_time_ms  = 0;  // milliseconds since epoch when started
 
         static std::string argsToCommand(const std::vector<std::string> & args) {
             std::string command;
@@ -78,20 +115,28 @@ class ProcessManager {
         }
     };
 
-    ProcessManager() = default;
+    // Initialize shared memory region on construction
+    ProcessManager();
 
     ~ProcessManager() {
-        // Ensure running processes are terminated
-        for (auto & process : processes_) {
-            if (process->state == ProcessState::PM_PROC_STATE_RUNNING) {
-                kill(process->pid, SIGKILL);
-            }
+        // Unmap and close shared memory (do not terminate jobs)
+        if (shared_jobs_) {
+            munmap(shared_jobs_, sizeof(SharedJobs));
+            close(shm_fd_);
+            shared_jobs_ = nullptr;
+            shm_fd_ = -1;
         }
-        processes_.clear();
     }
 
     ProcessManager(const ProcessManager &)             = delete;
     ProcessManager & operator=(const ProcessManager &) = delete;
+
+  public:
+    // Shared memory management
+    static SharedJobs *         shared_jobs_;
+    static int                  shm_fd_;
+    static std::once_flag       shm_init_flag;
+    static void ensure_shared();
 
     static void start_process(const std::vector<std::string> & args, bool run_in_background) {
         const auto grpid = getpgrp();
@@ -125,8 +170,10 @@ class ProcessManager {
 
             Process proc                         = { Process::argsToCommand(args), args, pid, type };
             proc.state                           = ProcessState::PM_PROC_STATE_RUNNING;
+            // Record start time in milliseconds since epoch
+            proc.start_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
             std::shared_ptr<Process> process_ptr = std::make_shared<Process>(std::move(proc));
-
             ProcessManager::instance().process_add(process_ptr);
 
             if (run_in_background) {
@@ -141,18 +188,34 @@ class ProcessManager {
     }
 
     bool process_delete(const pid_t & pid, const int & status_code = -1) {
-        std::lock_guard<std::mutex> lock(processes_mutex_);
-        for (auto it = processes_.begin(); it != processes_.end(); ++it) {
-            if ((*it)->pid == pid) {
-                (*it)->deleted = true;
-                (*it)->state   = ProcessState::PM_PROC_STATE_COMPLETED;
-                if (status_code != -1 && (*it)->exit_status != status_code) {
-                    (*it)->exit_status = status_code;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(processes_mutex_);
+            for (auto it = processes_.begin(); it != processes_.end(); ++it) {
+                if ((*it)->pid == pid) {
+                    (*it)->deleted = true;
+                    (*it)->state   = ProcessState::PM_PROC_STATE_COMPLETED;
+                    if (status_code != -1 && (*it)->exit_status != status_code) {
+                        (*it)->exit_status = status_code;
+                    }
+                    found = true;
+                    break;
                 }
-                return true;
             }
         }
-        return false;
+        // Remove from shared memory regardless
+        ensure_shared();
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.pid == pid) {
+                entry.in_use = false;
+                shared_jobs_->count = (shared_jobs_->count > 0 ? shared_jobs_->count - 1 : 0);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
+        return found;
     }
 
     bool process_add(std::shared_ptr<Process> & process) {
@@ -163,6 +226,25 @@ class ProcessManager {
             }
         }
         this->processes_.push_back(process);
+        // Also add to shared job table
+        ensure_shared();
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (!entry.in_use) {
+                entry.in_use = true;
+                entry.pid = process->pid;
+                entry.state = static_cast<uint8_t>(process->state);
+                entry.type = static_cast<uint8_t>(process->type);
+                entry.exit_status = process->exit_status;
+                entry.start_time_ms  = process->start_time_ms;
+                strncpy(entry.command, process->command.c_str(), sizeof(entry.command) - 1);
+                entry.command[sizeof(entry.command) - 1] = '\0';
+                shared_jobs_->count++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
         return true;
     }
 
@@ -285,9 +367,20 @@ class ProcessManager {
         for (auto & _process : processes_) {
             if (_process->pid == pid) {
                 _process->type = type;
-                return;
+                break;
             }
         }
+        // Update shared type
+        ensure_shared();
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.pid == pid) {
+                entry.type = static_cast<uint8_t>(type);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
     }
 
     void process_set_state(const pid_t & pid, const ProcessState & state) {
@@ -295,9 +388,20 @@ class ProcessManager {
         for (auto & _process : processes_) {
             if (_process->pid == pid) {
                 _process->state = state;
-                return;
+                break;
             }
         }
+        // Update shared state
+        ensure_shared();
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.pid == pid) {
+                entry.state = static_cast<uint8_t>(state);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
     }
 
     void process_set_exit_status(const pid_t & pid, const int & exit_status) {
@@ -305,9 +409,20 @@ class ProcessManager {
         for (auto & _process : processes_) {
             if (_process->pid == pid) {
                 _process->exit_status = exit_status;
-                return;
+                break;
             }
         }
+        // Update shared exit status
+        ensure_shared();
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.pid == pid) {
+                entry.exit_status = exit_status;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
     }
 
     static void handle_completed_processes() {
@@ -386,46 +501,90 @@ class ProcessManager {
     }
 
     std::vector<Process> get_running_processes() const {
-        std::lock_guard<std::mutex> lock(processes_mutex_);
-        std::vector<Process>        running;
-        for (const auto & process : processes_) {
-            if (process->state == ProcessState::PM_PROC_STATE_RUNNING) {
-                running.push_back(*process);
+        // Return all running jobs from shared memory
+        ensure_shared();
+        if (!shared_jobs_) {
+            return {};
+        }
+        std::vector<Process> running;
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.state == static_cast<uint8_t>(ProcessState::PM_PROC_STATE_RUNNING)) {
+                Process p;
+                p.pid = entry.pid;
+                p.command = std::string(entry.command);
+                p.args = Process::commandToArgs(p.command);
+                p.state = static_cast<ProcessState>(entry.state);
+                p.type = static_cast<ProcessType>(entry.type);
+                p.exit_status = entry.exit_status;
+                p.start_time_ms  = entry.start_time_ms;
+                running.push_back(std::move(p));
             }
         }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
         return running;
     }
 
     std::vector<Process> get_stopped_processes() const {
-        std::lock_guard<std::mutex> lock(processes_mutex_);
-        std::vector<Process>        stopped;
-        for (const auto & process : processes_) {
-            if (process->state == ProcessState::PM_PROC_STATE_STOPPED) {
-                stopped.push_back(*process);
+        // Return all stopped jobs from shared memory
+        ensure_shared();
+        if (!shared_jobs_) {
+            return {};
+        }
+        std::vector<Process> stopped;
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.state == static_cast<uint8_t>(ProcessState::PM_PROC_STATE_STOPPED)) {
+                Process p;
+                p.pid = entry.pid;
+                p.command = std::string(entry.command);
+                p.args = Process::commandToArgs(p.command);
+                p.state = static_cast<ProcessState>(entry.state);
+                p.type = static_cast<ProcessType>(entry.type);
+                p.exit_status = entry.exit_status;
+                p.start_time_ms  = entry.start_time_ms;
+                stopped.push_back(std::move(p));
             }
         }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
         return stopped;
     }
 
     size_t get_running_processes_count() const {
-        std::lock_guard<std::mutex> lock(processes_mutex_);
-        size_t                      count = 0;
-        for (const auto & process : processes_) {
-            if (process->state == ProcessState::PM_PROC_STATE_RUNNING) {
+        // Count running jobs in shared memory
+        ensure_shared();
+        if (!shared_jobs_) {
+            return 0;
+        }
+        size_t count = 0;
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.state == static_cast<uint8_t>(ProcessState::PM_PROC_STATE_RUNNING)) {
                 count++;
             }
         }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
         return count;
     }
 
     size_t get_stopped_processes_count() const {
-        std::lock_guard<std::mutex> lock(processes_mutex_);
-        size_t                      count = 0;
-        for (const auto & process : processes_) {
-            if (process->state == ProcessState::PM_PROC_STATE_STOPPED) {
+        // Count stopped jobs in shared memory
+        ensure_shared();
+        if (!shared_jobs_) {
+            return 0;
+        }
+        size_t count = 0;
+        pthread_mutex_lock(&shared_jobs_->mutex);
+        for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+            auto & entry = shared_jobs_->entries[i];
+            if (entry.in_use && entry.state == static_cast<uint8_t>(ProcessState::PM_PROC_STATE_STOPPED)) {
                 count++;
             }
         }
+        pthread_mutex_unlock(&shared_jobs_->mutex);
         return count;
     }
   private:
@@ -433,3 +592,45 @@ class ProcessManager {
     mutable std::mutex                    processes_mutex_;
 };
 #endif
+
+// Static member definitions and shared memory init
+inline ProcessManager::ProcessManager() {
+    ensure_shared();
+}
+inline SharedJobs * ProcessManager::shared_jobs_ = nullptr;
+inline int ProcessManager::shm_fd_ = -1;
+inline std::once_flag ProcessManager::shm_init_flag;
+inline void ProcessManager::ensure_shared() {
+    std::call_once(shm_init_flag, []() {
+        // Open or create shared memory
+        shm_fd_ = shm_open(SHM_NAME, O_RDWR | O_CREAT, 0666);
+        if (shm_fd_ < 0) {
+            perror("shm_open");
+            return;
+        }
+        size_t sz = sizeof(SharedJobs);
+        if (ftruncate(shm_fd_, sz) == -1) {
+            perror("ftruncate");
+        }
+        void * addr = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd_, 0);
+        if (addr == MAP_FAILED) {
+            perror("mmap");
+            close(shm_fd_);
+            shm_fd_ = -1;
+            return;
+        }
+        shared_jobs_ = static_cast<SharedJobs *>(addr);
+        // First-time initialization
+        if (shared_jobs_->initialized != 1) {
+            pthread_mutexattr_t mattr;
+            pthread_mutexattr_init(&mattr);
+            pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+            pthread_mutex_init(&shared_jobs_->mutex, &mattr);
+            shared_jobs_->count = 0;
+            for (size_t i = 0; i < SHM_MAX_JOBS; ++i) {
+                shared_jobs_->entries[i].in_use = false;
+            }
+            shared_jobs_->initialized = 1;
+        }
+    });
+}

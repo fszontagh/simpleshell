@@ -980,8 +980,14 @@ class SimpleShell {
         std::cout << "Background jobs: " << bg_jobs.size() << "\n";
         for (size_t i = 0; i < bg_jobs.size(); ++i) {
             const auto & proc = bg_jobs[i];
+            // Print job start time with seconds and milliseconds
+            time_t sec = proc.start_time_ms / 1000;
+            int milli = proc.start_time_ms % 1000;
+            std::tm *tm = std::localtime(&sec);
             std::cout << "[" << (i + 1) << "] PID: " << proc.pid
-                      << " status: " << ProcessManager::statusToString(proc.state)
+                      << " started: " << std::put_time(tm, "%Y-%m-%d %H:%M:%S")
+                      << "." << std::setw(3) << std::setfill('0') << milli << utils::ENDLINE;
+            std::cout << "status: " << ProcessManager::statusToString(proc.state)
                       << ", Command: " << proc.command << utils::ENDLINE;
         }
         // List stopped jobs
@@ -989,8 +995,14 @@ class SimpleShell {
         std::cout << "Stopped jobs: " << stopped.size() << "\n";
         for (size_t i = 0; i < stopped.size(); ++i) {
             const auto & proc = stopped[i];
+            // Print job start time with seconds and milliseconds
+            time_t sec = proc.start_time_ms / 1000;
+            int milli = proc.start_time_ms % 1000;
+            std::tm *tm = std::localtime(&sec);
             std::cout << "[" << (i + 1) << "] PID: " << proc.pid
-                      << " status: " << ProcessManager::statusToString(proc.state)
+                      << " started: " << std::put_time(tm, "%Y-%m-%d %H:%M:%S")
+                      << "." << std::setw(3) << std::setfill('0') << milli << utils::ENDLINE;
+            std::cout << "status: " << ProcessManager::statusToString(proc.state)
                       << ", Command: " << proc.command << utils::ENDLINE;
         }
         std::cout << utils::ENDLINE;
