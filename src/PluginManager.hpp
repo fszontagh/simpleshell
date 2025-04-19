@@ -119,7 +119,8 @@ class PluginManager {
     bool isPluginEnabled(const std::string & name) const;
 
     // callbacks
-    bool OnCommand(std::vector<std::string> & args);
+    // Handle command substitution via plugins; does not modify args
+    bool OnCommand(const std::vector<std::string> & args);
     bool OnPromptFormat(std::string & prompt);
 
     SetConfigValue setConfigCallback = nullptr;

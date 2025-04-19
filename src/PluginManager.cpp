@@ -61,7 +61,7 @@ bool PluginManager::isPluginEnabled(const std::string & name) const {
     return it != plugins.end() && it->second.enabled;
 }
 
-bool PluginManager::OnCommand(std::vector<std::string> & args) {
+bool PluginManager::OnCommand(const std::vector<std::string> & args) {
     if (args.empty()) {
         return true;
     }

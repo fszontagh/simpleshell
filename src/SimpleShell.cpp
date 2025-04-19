@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <iostream>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 SimpleShell * SimpleShell::instance = nullptr;
 
@@ -165,57 +167,222 @@ SimpleShell::~SimpleShell() {
 }
 
 void SimpleShell::execute_command(const std::string & command) {
-    std::vector<std::string> args = {};
-    utils::parse_arguments(command, args);
-    if (args.empty()) {
+    // Full pipeline and redirection handling
+    // Parse tokens
+    std::vector<std::string> raw_args;
+    utils::parse_arguments(command, raw_args);
+    if (raw_args.empty()) {
         return;
     }
 
-    // get the aliases
-    for (const auto & alias : this->config_get_section_variables("aliases")) {
-        if (alias.key.empty()) {
-            continue;
-        }
-        if (args[0] == alias.key) {
-            // replace the command with the alias
-            std::vector<std::string> alias_args = {};
-            std::stringstream        ss(alias.value);
-            std::string              segment;
-            while (ss >> segment) {
-                alias_args.push_back(segment);
-            }
-            alias_args.insert(alias_args.end(), args.begin() + 1, args.end());
-            args = alias_args;
+    // Background flag
+    bool run_in_background = false;
+    if (raw_args.back() == "&") {
+        run_in_background = true;
+        raw_args.pop_back();
+    }
+
+    // Alias expansion
+    for (const auto & alias : config_get_section_variables("aliases")) {
+        if (!alias.key.empty() && raw_args[0] == alias.key) {
+            std::vector<std::string> alias_args;
+            std::istringstream ss(alias.value);
+            std::string seg;
+            while (ss >> seg) alias_args.push_back(seg);
+            alias_args.insert(alias_args.end(), raw_args.begin() + 1, raw_args.end());
+            raw_args = std::move(alias_args);
             break;
         }
     }
 
-    args = SimpleShell::replace_stars(args);
+    auto args = replace_stars(raw_args);
 
-    if (instance->plugin_manager->OnCommand(args) == false) {
-        return;
-    }
-
-    for (const auto & buildInCmd : instance->custom_commands_) {
-        if (buildInCmd.first == args[0] &&
-            buildInCmd.second.type == SimpleShell::custom_command_type::SL_CUSTOM_COMMAND_TYPE_BUILTIN) {
-            if (args.size() > 1 && args[1] == "help") {
-                std::cout << buildInCmd.second.GetFormattedHelp();
+    // Split into pipeline commands and collect redirections
+    std::vector<std::vector<std::string>> cmds;
+    std::vector<std::vector<Redirection>> redirs;
+    cmds.emplace_back();
+    redirs.emplace_back();
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto & tok = args[i];
+        if (tok == "|") {
+            cmds.emplace_back();
+            redirs.emplace_back();
+        } else if (tok == "<" || tok == ">" || tok == ">>" || tok == "2>" || tok == "2>>") {
+            if (i + 1 >= args.size()) {
+                std::cerr << "Missing file after redirection " << tok << utils::ENDLINE;
                 return;
             }
-            buildInCmd.second.builtin_command(args);
-            return;
+            Redirection rd;
+            if (tok == "<") { rd.type = RedirType::IN; rd.mode = RedirMode::TRUNC; }
+            else if (tok == ">") { rd.type = RedirType::OUT; rd.mode = RedirMode::TRUNC; }
+            else if (tok == ">>") { rd.type = RedirType::OUT; rd.mode = RedirMode::APPEND; }
+            else if (tok == "2>") { rd.type = RedirType::ERR; rd.mode = RedirMode::TRUNC; }
+            else /* "2>>" */    { rd.type = RedirType::ERR; rd.mode = RedirMode::APPEND; }
+            rd.file = args[++i];
+            redirs.back().push_back(rd);
+        } else {
+            cmds.back().push_back(tok);
         }
     }
 
-    bool run_in_background = false;
-    if (!args.empty() && args.back() == "&") {
-        run_in_background = true;
-        args.pop_back();
-        std::cout << "Running in background: " << command << utils::ENDLINE;
+    if (cmds.size() == 1 && redirs[0].empty()) {
+        // No pipeline or redirection: default behavior
+        if (!instance->plugin_manager->OnCommand(args)) return;
+        for (const auto & cmd : custom_commands_) {
+            if (cmd.first == args[0] && cmd.second.type == custom_command_type::SL_CUSTOM_COMMAND_TYPE_BUILTIN) {
+                if (args.size() > 1 && args[1] == "help") {
+                    std::cout << cmd.second.GetFormattedHelp();
+                    return;
+                }
+                cmd.second.builtin_command(args);
+                return;
+            }
+        }
+        ProcessManager::start_process(args, run_in_background);
+    } else if (cmds.size() == 1) {
+        // Single command with redirection
+        handle_single_command(cmds[0], redirs[0], run_in_background);
+        } else {
+            // Multiple commands: pipeline
+            execute_pipeline(cmds, redirs, run_in_background);
+        }
     }
 
-    ProcessManager::start_process(args, run_in_background);
+// Single command execution with redirections
+void SimpleShell::handle_single_command(std::vector<std::string> cmd, const std::vector<Redirection> &redirs, bool background) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return;
+    }
+    if (pid == 0) {
+        // Child: apply redirections
+        for (const auto & rd : redirs) {
+            int fd = -1;
+            switch (rd.type) {
+                case RedirType::IN:
+                    fd = open(rd.file.c_str(), O_RDONLY);
+                    if (fd < 0) perror("open"); else { dup2(fd, STDIN_FILENO); close(fd); }
+                    break;
+                case RedirType::OUT:
+                    fd = open(rd.file.c_str(), O_WRONLY | O_CREAT | (rd.mode == RedirMode::APPEND ? O_APPEND : O_TRUNC), 0644);
+                    if (fd < 0) perror("open"); else { dup2(fd, STDOUT_FILENO); close(fd); }
+                    break;
+                case RedirType::ERR:
+                    fd = open(rd.file.c_str(), O_WRONLY | O_CREAT | (rd.mode == RedirMode::APPEND ? O_APPEND : O_TRUNC), 0644);
+                    if (fd < 0) perror("open"); else { dup2(fd, STDERR_FILENO); close(fd); }
+                    break;
+            }
+        }
+        // Plugin command
+        if (!instance->plugin_manager->OnCommand(cmd)) exit(EXIT_SUCCESS);
+        // Built-in command
+        for (const auto & bc : custom_commands_) {
+            if (bc.first == cmd[0] && bc.second.type == custom_command_type::SL_CUSTOM_COMMAND_TYPE_BUILTIN) {
+                bc.second.builtin_command(cmd);
+                exit(EXIT_SUCCESS);
+            }
+        }
+        // External command
+        std::vector<char *> cargs(cmd.size() + 1);
+        for (size_t i = 0; i < cmd.size(); ++i) cargs[i] = const_cast<char *>(cmd[i].c_str());
+        cargs[cmd.size()] = nullptr;
+        execvp(cargs[0], cargs.data());
+        perror("execvp");
+        exit(EXIT_FAILURE);
+    } else {
+        // Parent
+        if (background) {
+            std::cout << "Process " << pid << " running in background." << utils::ENDLINE;
+        } else {
+            int status = 0;
+            waitpid(pid, &status, 0);
+        }
+    }
+}
+
+// Pipeline execution
+void SimpleShell::execute_pipeline(const std::vector<std::vector<std::string>> &cmds, const std::vector<std::vector<Redirection>> &redirs, bool background) {
+    size_t n = cmds.size();
+    std::vector<int> pipefds(2 * (n - 1));
+    for (size_t i = 0; i + 1 < n; ++i) {
+        if (pipe(pipefds.data() + 2 * i) < 0) {
+            perror("pipe");
+            return;
+        }
+    }
+    std::vector<pid_t> pids(n);
+    pid_t pgid = 0;
+    for (size_t i = 0; i < n; ++i) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            return;
+        }
+        if (pid == 0) {
+            // Child: set process group
+            if (i == 0) setpgid(0, 0);
+            else setpgid(0, pgid);
+            // Set up pipeline fds
+            if (i > 0) {
+                dup2(pipefds[2 * (i - 1)], STDIN_FILENO);
+            }
+            if (i + 1 < n) {
+                dup2(pipefds[2 * i + 1], STDOUT_FILENO);
+            }
+            // Close all pipe fds
+            for (int fd : pipefds) close(fd);
+            // Apply segment redirections
+            for (const auto & rd : redirs[i]) {
+                int fd = -1;
+                switch (rd.type) {
+                    case RedirType::IN:
+                        fd = open(rd.file.c_str(), O_RDONLY);
+                        if (fd < 0) perror("open"); else { dup2(fd, STDIN_FILENO); close(fd); }
+                        break;
+                    case RedirType::OUT:
+                        fd = open(rd.file.c_str(), O_WRONLY | O_CREAT | (rd.mode == RedirMode::APPEND ? O_APPEND : O_TRUNC), 0644);
+                        if (fd < 0) perror("open"); else { dup2(fd, STDOUT_FILENO); close(fd); }
+                        break;
+                    case RedirType::ERR:
+                        fd = open(rd.file.c_str(), O_WRONLY | O_CREAT | (rd.mode == RedirMode::APPEND ? O_APPEND : O_TRUNC), 0644);
+                        if (fd < 0) perror("open"); else { dup2(fd, STDERR_FILENO); close(fd); }
+                        break;
+                }
+            }
+            // Plugin
+            if (!instance->plugin_manager->OnCommand(cmds[i])) exit(EXIT_SUCCESS);
+            // Built-in
+            for (const auto & bc : custom_commands_) {
+                if (bc.first == cmds[i][0] && bc.second.type == custom_command_type::SL_CUSTOM_COMMAND_TYPE_BUILTIN) {
+                    bc.second.builtin_command(cmds[i]);
+                    exit(EXIT_SUCCESS);
+                }
+            }
+            // External
+            std::vector<char *> cargs(cmds[i].size() + 1);
+            for (size_t j = 0; j < cmds[i].size(); ++j) cargs[j] = const_cast<char *>(cmds[i][j].c_str());
+            cargs[cmds[i].size()] = nullptr;
+            execvp(cargs[0], cargs.data());
+            perror("execvp");
+            exit(EXIT_FAILURE);
+        } else {
+            // Parent: set process group
+            pids[i] = pid;
+            if (i == 0) pgid = pid;
+            setpgid(pid, pgid);
+        }
+    }
+    // Parent: close all pipe fds
+    for (int fd : pipefds) close(fd);
+    if (background) {
+        std::cout << "Pipeline running in background pids:";
+        for (auto pid : pids) std::cout << " " << pid;
+        std::cout << utils::ENDLINE;
+    } else {
+        int status = 0;
+        for (auto pid : pids) waitpid(pid, &status, 0);
+    }
 }
 
 void SimpleShell::format_prompt() {
