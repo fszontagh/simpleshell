@@ -511,17 +511,21 @@ class SimpleShell {
                     result.push_back(s);
                     continue;
                 }
-                std::string base_path = current_dir;
-                std::string pattern   = s;
+                std::string base_path;
+                std::string pattern = s;
 
                 if (s.find('/') != std::string::npos) {
                     std::filesystem::path p(s);
                     pattern = p.filename().string();
                     base_path = p.parent_path().string();
-                    // Keep relative paths as-is, don't prepend current directory
+                    // Keep relative paths as-is
                     if (base_path.empty()) {
                         base_path = ".";  // Current directory
                     }
+                }
+                
+                if (base_path.empty()) {
+                    base_path = ".";  // Handle patterns without directory
                 }
                 std::string pattern_with_wildcard = base_path + "/" + pattern;
                 // Perform glob directly, collect matching filenames
