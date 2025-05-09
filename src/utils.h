@@ -189,10 +189,13 @@ static void parse_arguments(const std::string & command, std::vector<std::string
             quote_char = c;
         } else if (c == quote_char && in_quotes) {
             in_quotes = false;
-        } else if (std::isspace(c) && !in_quotes) {
+        } else if ((std::isspace(c) || c == '|') && !in_quotes) {
             if (!current_arg.empty()) {
                 args.push_back(current_arg);
                 current_arg.clear();
+            }
+            if (c == '|') {
+                args.push_back("|");
             }
         } else {
             current_arg += c;
