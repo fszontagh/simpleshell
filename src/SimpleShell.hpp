@@ -516,12 +516,11 @@ class SimpleShell {
 
                 if (s.find('/') != std::string::npos) {
                     std::filesystem::path p(s);
-                    pattern   = p.filename().string();
+                    pattern = p.filename().string();
                     base_path = p.parent_path().string();
+                    // Keep relative paths as-is, don't prepend current directory
                     if (base_path.empty()) {
-                        base_path = current_dir;
-                    } else {
-                        base_path.insert(0, current_dir + "/");
+                        base_path = ".";  // Current directory
                     }
                 }
                 std::string pattern_with_wildcard = base_path + "/" + pattern;
@@ -533,10 +532,7 @@ class SimpleShell {
                     for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
                         std::string p = glob_result.gl_pathv[i];
                         // Strip base_path prefix
-                        std::string prefix = base_path + "/";
-                        if (!base_path.empty() && p.rfind(prefix, 0) == 0) {
-                            p = p.substr(prefix.size());
-                        }
+                        // Use full matched path without stripping base_path
                         result.push_back(p);
                     }
                 } else {
