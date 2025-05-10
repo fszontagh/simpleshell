@@ -205,6 +205,29 @@ static void parse_arguments(const std::string & command, std::vector<std::string
     if (!current_arg.empty()) {
         args.push_back(current_arg);
     }
+
+    // Wildcard expansion with directory preservation
+    std::vector<std::string> expanded_args;
+    for (const auto& arg : args) {
+        if (arg.find('*') != std::string::npos) {
+            glob_t glob_result;
+            std::string pattern = arg;
+            
+            // Separate directory and pattern
+            size_t last_slash = pattern.find_last_of("/");
+            std::string dir = (last_slash != std::string::npos) ? pattern.substr(0, last_slash + 1) : "";
+            std::string file_pattern = (last_slash != std::string::npos) ? pattern.substr(last_slash + 1) : pattern;
+            
+            glob(file_pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
+            for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
+                expanded_args.push_back(dir + glob_result.gl_pathv[i]);
+            }
+            globfree(&glob_result);
+        } else {
+            expanded_args.push_back(arg);
+        }
+    }
+    args = expanded_args;
 }
 
 };  // namespace utils
