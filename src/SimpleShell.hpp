@@ -1017,12 +1017,6 @@ class SimpleShell {
         std::string filenames;
         for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
             std::string p = glob_result.gl_pathv[i];
-            if (base_path.empty() == false) {
-                // remove the base_path from the p
-                if (p.find(base_path) == 0) {
-                    p = p.substr(base_path.size());
-                }
-            }
             filenames.append(utils::ConfigUtils::escape(p));
             filenames.append(" ");
         }
