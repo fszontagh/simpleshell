@@ -511,12 +511,11 @@ class SimpleShell {
                     result.push_back(s);
                     continue;
                 }
-                // Use the pattern exactly as provided
-                std::string pattern_with_wildcard = s;
-                // Perform glob directly, collect matching filenames
+                // Use absolute path for globbing
+                std::filesystem::path abs_path = std::filesystem::absolute(s);
                 glob_t glob_result;
                 memset(&glob_result, 0, sizeof(glob_result));
-                int ret = glob(pattern_with_wildcard.c_str(), GLOB_TILDE, NULL, &glob_result);
+                int ret = glob(abs_path.c_str(), GLOB_TILDE | GLOB_MARK, NULL, &glob_result);
                 if (ret == 0) {
                     for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
                         std::string p = glob_result.gl_pathv[i];
