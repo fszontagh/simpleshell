@@ -39,10 +39,20 @@ int main(int argc, char * argv[]) {
             std::cout << "\n" << utils::ENDLINE;
             return 0;
         }
-        // Treat first non-option as script or command to run
-        runnable = arg;
-        for (int i = 2; i < argc; ++i) {
-            params.push_back(argv[i]);
+        // Check for -c option
+        if (arg == "-c") {
+            if (argc < 3) {
+                std::cerr << "Error: -c option requires a command argument\n";
+                return 1;
+            }
+            runnable = arg;
+            params.push_back(argv[2]);
+        } else {
+            // Treat first non-option as script or command to run
+            runnable = arg;
+            for (int i = 2; i < argc; ++i) {
+                params.push_back(argv[i]);
+            }
         }
     }
     // Initialize shell after processing --help/--version

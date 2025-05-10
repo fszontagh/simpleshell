@@ -111,7 +111,15 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
 
     bool one_shot = false;
     if ((!maybefile.empty()) && (maybefile != "-")) {
-        if (std::filesystem::exists(maybefile)) {
+        if (maybefile == "-c") {
+            if (!params.empty()) {
+                command = params[0];
+                one_shot = true;
+            } else {
+                std::cerr << "Error: No command provided with -c option" << utils::ENDLINE;
+                return;
+            }
+        } else if (std::filesystem::exists(maybefile)) {
             command = maybefile;
             for (const auto & param : params) {
                 command.append(" ");
