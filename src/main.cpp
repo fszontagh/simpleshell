@@ -6,7 +6,29 @@
 
 #include "SimpleShell.hpp"
 
+// Test function for multi-line command handling
+void test_multi_line_handling() {
+    std::cout << "Testing multi-line command handling..." << std::endl;
+    
+    // Create a SimpleShell instance
+    SimpleShell shell;
+    
+    // Test with a multi-line command
+    std::string multi_line_command = "echo Line 1\necho Line 2\necho Line 3\nls -la\npwd\necho 'Test completed successfully'";
+    
+    // Call the run method with the multi-line command
+    shell.run("-c", {multi_line_command});
+    
+    std::cout << "Multi-line test completed." << std::endl;
+}
+
 int main(int argc, char * argv[]) {
+    // Check if we're running the test
+    if (argc > 1 && std::string(argv[1]) == "--test-multi-line") {
+        test_multi_line_handling();
+        return 0;
+    }
+    
     setpgid(0, 0);
     tcsetpgrp(STDIN_FILENO, getpgrp());
     tcsetpgrp(STDOUT_FILENO, getpgrp());

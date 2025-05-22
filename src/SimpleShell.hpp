@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>
