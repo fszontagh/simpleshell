@@ -484,56 +484,59 @@ class SimpleShell {
             input.replace(position, full_match.length(), value);
             search_start = input.cbegin() + position + value.length();
         }
-        // replace ~ with home directory
+        // replace ~ with home directory, but only at the beginning of a path component
         std::string home = getenv("HOME");
         if (!home.empty()) {
-            // replace all occurrences of ~ with home directory
             size_t pos = 0;
             while ((pos = input.find('~', pos)) != std::string::npos) {
-                input.replace(pos, 1, home);
-                pos += home.length();
+                // Only expand ~ if it's at the beginning of a string or after a space, quote, or path separator
+                bool should_expand = (pos == 0) || 
+                                    (input[pos-1] == ' ') || 
+                                    (input[pos-1] == '"') || 
+                                    (input[pos-1] == '\'') || 
+                                    (input[pos-1] == '/');
+                
+                // Don't expand if it's escaped with a backslash
+                if (pos > 0 && input[pos-1] == '\\') {
+                    should_expand = false;
+                    // Remove the escape character and keep the literal ~
+                    input.erase(pos-1, 1);
+                    pos++; // Skip past the ~
+                    continue;
+                }
+                
+                if (should_expand) {
+                    // Check for ~user format
+                    size_t end_pos = input.find_first_of(" /\"'", pos + 1);
+                    if (end_pos == std::string::npos) {
+                        end_pos = input.length();
+                    }
+                    
+                    // If there's text after the ~, it might be a username
+                    if (pos + 1 < end_pos) {
+                        std::string username = input.substr(pos + 1, end_pos - (pos + 1));
+                        // For simplicity, we'll just handle ~ and not ~user
+                        // In a real implementation, you'd look up the user's home directory
+                        // For now, we'll only expand plain ~ and leave ~user as is
+                        if (!username.empty()) {
+                            pos = end_pos;
+                            continue;
+                        }
+                    }
+                    
+                    input.replace(pos, 1, home);
+                    pos += home.length();
+                } else {
+                    pos++; // Skip this occurrence
+                }
             }
         }
         return original_input;
     }
 
     static std::vector<std::string> replace_stars(const std::vector<std::string> & args) {
-        std::vector<std::string> result;
-        const std::string        current_dir = getenv("PWD");
-
-        for (const auto & s : args) {
-            const auto _pos = s.find('*');
-            if (_pos != std::string::npos) {
-                if (_pos > 0 && s.substr(_pos - 1, 1) == "\\") {
-                    result.push_back(s);
-                    continue;
-                }
-                if (_pos > 0 && s.substr(_pos - 1, 1) == "\"") {
-                    result.push_back(s);
-                    continue;
-                }
-                // Use relative path for globbing and preserve path structure
-                glob_t glob_result;
-                memset(&glob_result, 0, sizeof(glob_result));
-                int ret = glob(s.c_str(), GLOB_TILDE | GLOB_MARK, NULL, &glob_result);
-                if (ret == 0) {
-                    for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
-                        std::string p = glob_result.gl_pathv[i];
-                        // Strip base_path prefix
-                        // Use full matched path without stripping base_path
-                        result.push_back(p);
-                    }
-                } else {
-                    // No matches: keep literal pattern
-                    result.push_back(s);
-                }
-                globfree(&glob_result);
-            } else {
-                result.push_back(s);
-            }
-        }
-
-        return result;
+        // This function is now a wrapper around the improved wildcard expansion in utils.h
+        return utils::expand_wildcards_and_tildes(args);
     }
 
     static void replace_colors(std::string & input) {
@@ -986,28 +989,27 @@ class SimpleShell {
     }
 
     [[nodiscard]] static std::string glob_files(const std::string & pattern, const std::string & base_path = "") {
-        // glob struct resides on the stack
-        glob_t glob_result;
-        memset(&glob_result, 0, sizeof(glob_result));
-
-        // do the glob operation
-        int return_value = glob(pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
-        if (return_value != 0) {
-            globfree(&glob_result);
+        // Use our improved wildcard expansion
+        std::vector<std::string> args = { pattern };
+        std::vector<std::string> expanded = utils::expand_wildcards_and_tildes(args);
+        
+        // If no matches or error, return empty string
+        if (expanded.empty() || (expanded.size() == 1 && expanded[0] == pattern)) {
             return "";
         }
-
-        // collect all the filenames into a std::list<std::string>
+        
+        // Collect all the filenames into a space-separated string
         std::string filenames;
-        for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
-            std::string p = glob_result.gl_pathv[i];
+        for (const auto& p : expanded) {
             filenames.append(utils::ConfigUtils::escape(p));
             filenames.append(" ");
         }
-        filenames = filenames.substr(0, filenames.size() - 1);
-        // cleanup
-        globfree(&glob_result);
-        // done
+        
+        // Remove trailing space if any
+        if (!filenames.empty()) {
+            filenames = filenames.substr(0, filenames.size() - 1);
+        }
+        
         return filenames;
     }
 };

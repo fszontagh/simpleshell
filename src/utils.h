@@ -175,6 +175,90 @@ class ConfigUtils {
     }
 };
 
+static std::vector<std::string> expand_wildcards_and_tildes(const std::vector<std::string>& args) {
+    std::vector<std::string> expanded_args;
+    for (const auto& arg : args) {
+        // Skip if this is a pipe symbol or redirection operator
+        if (arg == "|" || arg == "<" || arg == ">" || arg == ">>" || arg == "2>" || arg == "2>>") {
+            expanded_args.push_back(arg);
+            continue;
+        }
+        
+        // Check if the argument contains a wildcard
+        if (arg.find('*') != std::string::npos || arg.find('?') != std::string::npos) {
+            // Check if the wildcard is escaped or quoted
+            bool is_escaped = false;
+            size_t wildcard_pos = arg.find('*');
+            if (wildcard_pos == std::string::npos) {
+                wildcard_pos = arg.find('?');
+            }
+            
+            if (wildcard_pos > 0) {
+                is_escaped = (arg[wildcard_pos-1] == '\\') || 
+                             (arg.find('"', 0) != std::string::npos && 
+                              arg.find('"', arg.find('"', 0) + 1) != std::string::npos);
+            }
+            
+            if (is_escaped) {
+                // If the wildcard is escaped, remove the escape character and add as literal
+                std::string unescaped = arg;
+                size_t escape_pos = unescaped.find('\\');
+                while (escape_pos != std::string::npos && escape_pos + 1 < unescaped.length()) {
+                    if (unescaped[escape_pos + 1] == '*' || unescaped[escape_pos + 1] == '?') {
+                        unescaped.erase(escape_pos, 1);
+                    }
+                    escape_pos = unescaped.find('\\', escape_pos + 1);
+                }
+                expanded_args.push_back(unescaped);
+            } else {
+                // Use glob directly on the full pattern to handle both directory and file wildcards
+                glob_t glob_result;
+                memset(&glob_result, 0, sizeof(glob_result));
+                
+                // Use GLOB_TILDE to expand ~ at the beginning of the pattern
+                int ret = glob(arg.c_str(), GLOB_TILDE | GLOB_NOCHECK, NULL, &glob_result);
+                
+                if (ret == 0 && glob_result.gl_pathc > 0) {
+                    // Check if we got actual matches or just the original pattern back (GLOB_NOCHECK)
+                    if (glob_result.gl_pathc == 1 && strcmp(glob_result.gl_pathv[0], arg.c_str()) == 0) {
+                        // No matches found, but we're using GLOB_NOCHECK so we get the original pattern back
+                        expanded_args.push_back(arg);
+                    } else {
+                        // Add all matches
+                        for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
+                            expanded_args.push_back(glob_result.gl_pathv[i]);
+                        }
+                    }
+                } else {
+                    // Error or no matches, keep the original argument
+                    expanded_args.push_back(arg);
+                }
+                
+                globfree(&glob_result);
+            }
+        } else {
+            // No wildcard, but we still need to handle tilde expansion
+            if (arg.find('~') == 0) {
+                glob_t glob_result;
+                memset(&glob_result, 0, sizeof(glob_result));
+                
+                int ret = glob(arg.c_str(), GLOB_TILDE, NULL, &glob_result);
+                
+                if (ret == 0 && glob_result.gl_pathc > 0) {
+                    expanded_args.push_back(glob_result.gl_pathv[0]);
+                } else {
+                    expanded_args.push_back(arg);
+                }
+                
+                globfree(&glob_result);
+            } else {
+                expanded_args.push_back(arg);
+            }
+        }
+    }
+    return expanded_args;
+}
+
 static void parse_arguments(const std::string & command, std::vector<std::string> & args) {
     args.clear();
     std::string current_arg;
@@ -205,29 +289,9 @@ static void parse_arguments(const std::string & command, std::vector<std::string
     if (!current_arg.empty()) {
         args.push_back(current_arg);
     }
-
-    // Wildcard expansion with directory preservation
-    std::vector<std::string> expanded_args;
-    for (const auto& arg : args) {
-        if (arg.find('*') != std::string::npos) {
-            glob_t glob_result;
-            std::string pattern = arg;
-            
-            // Separate directory and pattern
-            size_t last_slash = pattern.find_last_of("/");
-            std::string dir = (last_slash != std::string::npos) ? pattern.substr(0, last_slash + 1) : "";
-            std::string file_pattern = (last_slash != std::string::npos) ? pattern.substr(last_slash + 1) : pattern;
-            
-            glob(file_pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
-            for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
-                expanded_args.push_back(dir + glob_result.gl_pathv[i]);
-            }
-            globfree(&glob_result);
-        } else {
-            expanded_args.push_back(arg);
-        }
-    }
-    args = expanded_args;
+    
+    // Apply wildcard and tilde expansion
+    args = expand_wildcards_and_tildes(args);
 }
 
 };  // namespace utils
