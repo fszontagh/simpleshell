@@ -152,12 +152,39 @@ void SimpleShell::run(const std::string & maybefile, const std::vector<std::stri
             break;
         }
 
-        const std::string original_command = SimpleShell::replace_variables(command);
-
-        if (!command.empty()) {
+        // Handle multi-line commands (split by newlines)
+        std::vector<std::string> command_lines;
+        std::istringstream command_stream(command);
+        std::string line;
+        
+        // Split the command by newlines
+        while (std::getline(command_stream, line)) {
+            // Trim whitespace from the line
+            line = utils::ConfigUtils::trim_string(line);
+            if (!line.empty()) {
+                command_lines.push_back(line);
+            }
+        }
+        
+        // If we have multiple lines, execute each one
+        if (command_lines.size() > 1) {
+            for (auto& cmd_line : command_lines) {
+                std::string cmd_line_copy = cmd_line;
+                std::string original_line = SimpleShell::replace_variables(cmd_line_copy);
+                if (!cmd_line.empty()) {
+                    std::cout << prompt_ << cmd_line << utils::ENDLINE;
+                    this->execute_command(cmd_line);
+                    add_history(original_line.c_str());
+                }
+            }
+        } else if (!command.empty()) {
+            // Single line command (original behavior)
+            std::string command_copy = command;
+            std::string original_command = SimpleShell::replace_variables(command_copy);
             this->execute_command(command);
             add_history(original_command.c_str());
         }
+        
         command.clear();
         if (one_shot) {
             break;

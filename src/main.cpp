@@ -7,6 +7,7 @@
 #include "SimpleShell.hpp"
 
 int main(int argc, char * argv[]) {
+    
     setpgid(0, 0);
     tcsetpgrp(STDIN_FILENO, getpgrp());
     tcsetpgrp(STDOUT_FILENO, getpgrp());
